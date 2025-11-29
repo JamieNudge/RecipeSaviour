@@ -32,6 +32,11 @@ struct ContentView: View {
                 }
                 .badge("Plan my week")
                 .environmentObject(recipeManager)
+            
+            SettingsView()
+                .tabItem {
+                    Label("Settings", systemImage: "gear")
+                }
         }
         .background(RSTheme.Colors.background.ignoresSafeArea())
     }
