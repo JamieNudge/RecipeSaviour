@@ -18,4 +18,20 @@ struct Recipe: Identifiable, Codable {
     }
 }
 
+struct MealPlan: Identifiable, Codable, Equatable {
+    let id: UUID
+    let createdAt: Date
+    let recipes: [Recipe]
+    
+    init(id: UUID = UUID(), createdAt: Date = Date(), recipes: [Recipe]) {
+        self.id = id
+        self.createdAt = createdAt
+        self.recipes = recipes
+    }
+
+    static func == (lhs: MealPlan, rhs: MealPlan) -> Bool {
+        lhs.id == rhs.id
+    }
+}
+
 

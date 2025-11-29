@@ -19,12 +19,21 @@ struct ContentView: View {
                 .badge(recipeManager.savedRecipes.count)
                 .environmentObject(recipeManager)
             
+            FavouritePlansView()
+                .tabItem {
+                    Label("Plans", systemImage: "list.bullet.rectangle")
+                }
+                .badge(recipeManager.favouritePlans.count)
+                .environmentObject(recipeManager)
+            
             MealPlannerView()
                 .tabItem {
                     Label("Meal Planner", systemImage: "cart.fill")
                 }
+                .badge("Plan my week")
                 .environmentObject(recipeManager)
         }
+        .background(RSTheme.Colors.background.ignoresSafeArea())
     }
 }
 
@@ -38,74 +47,90 @@ struct ExtractRecipeView: View {
 
     var body: some View {
         NavigationView {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text("Paste a recipe web link and Recipe Saviour will strip the waffle and show just the ingredients and method.")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-
-                    HStack {
-                        TextField("Paste Recipe URL here!", text: $urlString)
-                            .keyboardType(.URL)
-                            .textInputAutocapitalization(.never)
-                            .disableAutocorrection(true)
-                            .textFieldStyle(.roundedBorder)
-                            .submitLabel(.done)
-                            .onSubmit {
-                                hideKeyboard()
-                            }
-                        
-                        if !urlString.isEmpty {
-                            Button(action: {
-                                urlString = ""
-                                recipe = nil
-                                errorMessage = nil
-                            }) {
-                                Image(systemName: "xmark.circle.fill")
-                                    .foregroundColor(.secondary)
-                            }
-                            .buttonStyle(.plain)
+            ZStack {
+                RSTheme.Colors.background
+                    .ignoresSafeArea()
+                
+                ScrollView {
+                    VStack(alignment: .leading, spacing: RSTheme.Spacing.lg) {
+                        VStack(alignment: .leading, spacing: RSTheme.Spacing.sm) {
+                            Text("Save recipes from the endless waffle")
+                                .rsSectionTitle()
+                            Text("Paste a recipe link and we'll keep only the ingredients and method so you can actually cook.")
+                                .rsSecondary()
                         }
-                    }
 
-                    Button(action: { 
-                        hideKeyboard()
-                        Task { await fetchRecipe() } 
-                    }) {
-                        if isLoading {
-                            HStack(spacing: 8) {
-                                Text("🥘")
+                        VStack(spacing: RSTheme.Spacing.sm) {
+                            HStack {
+                                Image(systemName: "link.circle.fill")
+                                    .foregroundColor(RSTheme.Colors.primary)
                                     .font(.title2)
-                                    .rotationEffect(.degrees(isLoading ? 360 : 0))
-                                    .animation(.linear(duration: 1).repeatForever(autoreverses: false), value: isLoading)
-                                Text("Cooking up your recipe...")
-                                    .fontWeight(.semibold)
+                                
+                                TextField("Paste recipe URL here", text: $urlString)
+                                    .keyboardType(.URL)
+                                    .textInputAutocapitalization(.never)
+                                    .disableAutocorrection(true)
+                                    .submitLabel(.done)
+                                    .onSubmit {
+                                        hideKeyboard()
+                                        Task { await fetchRecipe() }
+                                    }
+                                
+                                if !urlString.isEmpty {
+                                    Button(action: {
+                                        urlString = ""
+                                        recipe = nil
+                                        errorMessage = nil
+                                    }) {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .foregroundColor(.secondary)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
                             }
-                        } else {
-                            Text("Save Recipe From The Endless Waffle")
-                                .fontWeight(.semibold)
-                                .multilineTextAlignment(.center)
+                            .padding(.horizontal, RSTheme.Spacing.md)
+                            .padding(.vertical, RSTheme.Spacing.sm)
+                            .background(RSTheme.Colors.card)
+                            .cornerRadius(14)
+                            .shadow(color: Color.black.opacity(0.03), radius: 6, x: 0, y: 3)
                         }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(isLoading || urlString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
-                    if let errorMessage {
-                        Text(errorMessage)
-                            .foregroundColor(.red)
-                            .font(.footnote)
-                    }
+                        if let errorMessage {
+                            Text(errorMessage)
+                                .foregroundColor(RSTheme.Colors.error)
+                                .rsCaption()
+                        }
 
-                    if let recipe {
-                        RecipeView(recipe: recipe, showSaveButton: true)
-                    } else if !isLoading && errorMessage == nil {
-                        Text("No recipe yet. Paste a link and tap “Clean recipe”.")
-                            .foregroundColor(.secondary)
-                    }
+                        if let recipe {
+                            RecipeView(recipe: recipe, showSaveButton: true)
+                                .padding()
+                                .background(RSTheme.Colors.card)
+                                .cornerRadius(16)
+                                .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 4)
+                        } else if !isLoading && errorMessage == nil {
+                            VStack(alignment: .leading, spacing: RSTheme.Spacing.sm) {
+                                Text("No recipe yet")
+                                    .font(.headline)
+                                Text("Paste a link and hit return to see it without the life story.")
+                                    .rsSecondary()
+                            }
+                        }
 
-                    Spacer()
+                        Spacer(minLength: RSTheme.Spacing.xl)
+                    }
+                    .padding()
                 }
-                .padding()
+                
+                if isLoading {
+                    Color.black.opacity(0.12)
+                        .ignoresSafeArea()
+                    VStack(spacing: RSTheme.Spacing.sm) {
+                        ProgressView()
+                            .tint(RSTheme.Colors.primary)
+                        Text("Cooking up your recipe...")
+                            .rsCaption()
+                    }
+                }
             }
             .navigationTitle("Recipe Saviour")
             .toolbar {
@@ -160,18 +185,24 @@ struct ExtractRecipeView: View {
 
             if let parsed = RecipeExtractor.extract(from: html, url: url) {
                 await MainActor.run {
-                    self.recipe = parsed
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                        self.recipe = parsed
+                    }
                     self.errorMessage = nil
                 }
             } else {
                 await MainActor.run {
-                    self.recipe = nil
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        self.recipe = nil
+                    }
                     self.errorMessage = "You'll have to scan through the life story around this one. Sorry. Next!"
                 }
             }
         } catch {
             await MainActor.run {
-                self.recipe = nil
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    self.recipe = nil
+                }
                 if let urlError = error as? URLError {
                     switch urlError.code {
                     case .unsupportedURL:
@@ -203,10 +234,10 @@ struct RecipeView: View {
     @State private var showingSavedAlert = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: RSTheme.Spacing.lg) {
             HStack {
                 Text(recipe.title)
-                    .font(.title2.bold())
+                    .font(RSTheme.Typography.sectionTitle)
                 Spacer()
                 if showSaveButton {
                     Button(action: {
@@ -223,26 +254,42 @@ struct RecipeView: View {
             }
 
             if !recipe.ingredients.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: RSTheme.Spacing.sm) {
                     Text("Ingredients")
-                        .font(.headline)
-                    ForEach(recipe.ingredients, id: \.self) { line in
-                        Text("• \(line)")
-                            .fixedSize(horizontal: false, vertical: true)
+                        .rsSectionTitle()
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(recipe.ingredients, id: \.self) { line in
+                            HStack(alignment: .top, spacing: 8) {
+                                Text("•")
+                                    .font(.body.bold())
+                                Text(line)
+                                    .rsBody()
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
                     }
                 }
             }
-
+            
+            if !recipe.ingredients.isEmpty && !recipe.steps.isEmpty {
+                Divider()
+            }
+            
             if !recipe.steps.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: RSTheme.Spacing.sm) {
                     Text("Method")
-                        .font(.headline)
-                    ForEach(Array(recipe.steps.enumerated()), id: \.offset) { index, step in
-                        HStack(alignment: .top, spacing: 8) {
-                            Text("\(index + 1).")
-                                .font(.headline)
-                            Text(step)
-                                .fixedSize(horizontal: false, vertical: true)
+                        .rsSectionTitle()
+                    VStack(alignment: .leading, spacing: RSTheme.Spacing.sm) {
+                        ForEach(Array(recipe.steps.enumerated()), id: \.offset) { index, step in
+                            HStack(alignment: .top, spacing: 10) {
+                                Text("\(index + 1)")
+                                    .font(.headline)
+                                    .foregroundColor(RSTheme.Colors.accent)
+                                    .frame(width: 22, alignment: .leading)
+                                Text(step)
+                                    .rsBody()
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
                     }
                 }
@@ -267,47 +314,59 @@ struct SavedRecipesView: View {
     
     var body: some View {
         NavigationView {
-            Group {
-                if recipeManager.savedRecipes.isEmpty {
-                    VStack(spacing: 16) {
-                        Image(systemName: "book.closed")
-                            .font(.system(size: 60))
-                            .foregroundColor(.secondary)
-                        Text("No saved recipes yet")
-                            .font(.title2)
-                            .foregroundColor(.secondary)
-                        Text("Extract a recipe and tap the + button to save it")
-                            .font(.footnote)
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                    }
-                    .padding()
-                } else {
-                    List {
-                        ForEach(recipeManager.savedRecipes.sorted(by: { $0.dateSaved > $1.dateSaved })) { recipe in
-                            Button(action: {
-                                selectedRecipe = recipe
-                            }) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(recipe.title)
-                                        .font(.headline)
-                                    Text("\(recipe.ingredients.count) ingredients • \(recipe.steps.count) steps")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                    Text("Saved \(recipe.dateSaved.formatted(date: .abbreviated, time: .omitted))")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
+            ZStack {
+                RSTheme.Colors.background
+                    .ignoresSafeArea()
+                
+                Group {
+                    if recipeManager.savedRecipes.isEmpty {
+                        VStack(spacing: RSTheme.Spacing.lg) {
+                            Image(systemName: "book.closed")
+                                .font(.system(size: 60))
+                                .foregroundColor(RSTheme.Colors.primary.opacity(0.7))
+                            Text("No saved recipes yet")
+                                .font(RSTheme.Typography.sectionTitle)
+                                .foregroundColor(RSTheme.Colors.textPrimary)
+                            Text("Extract a recipe and tap the + button to save it")
+                                .rsSecondary()
+                                .multilineTextAlignment(.center)
+                        }
+                        .padding()
+                    } else {
+                        List {
+                            ForEach(recipeManager.savedRecipes.sorted(by: { $0.dateSaved > $1.dateSaved })) { recipe in
+                                Button(action: {
+                                    selectedRecipe = recipe
+                                }) {
+                                    HStack(alignment: .top, spacing: RSTheme.Spacing.md) {
+                                        Image(systemName: "fork.knife.circle.fill")
+                                            .foregroundColor(RSTheme.Colors.accent)
+                                            .font(.title2)
+                                        
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(recipe.title)
+                                                .font(.headline)
+                                            Text("\(recipe.ingredients.count) ingredients • \(recipe.steps.count) steps")
+                                                .rsCaption()
+                                            Text("Saved \(recipe.dateSaved.formatted(date: .abbreviated, time: .omitted))")
+                                                .rsCaption()
+                                        }
+                                    }
+                                    .padding(.vertical, RSTheme.Spacing.sm)
                                 }
-                            }
-                            .buttonStyle(.plain)
-                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                Button(role: .destructive) {
-                                    recipeManager.deleteRecipe(recipe)
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
+                                .buttonStyle(.plain)
+                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                    Button(role: .destructive) {
+                                        recipeManager.deleteRecipe(recipe)
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
                                 }
                             }
                         }
+                        .scrollContentBackground(.hidden)
+                        .background(RSTheme.Colors.background)
+                        .listStyle(.insetGrouped)
                     }
                 }
             }

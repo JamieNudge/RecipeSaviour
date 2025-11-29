@@ -4,13 +4,16 @@ import Combine
 @MainActor
 class RecipeManager: ObservableObject {
     @Published var savedRecipes: [Recipe] = []
+    @Published var favouritePlans: [MealPlan] = []
     
     private let persistenceKey = "savedRecipes"
+    private let plansPersistenceKey = "savedMealPlans"
     
     static let shared = RecipeManager()
     
     private init() {
         loadRecipes()
+        loadMealPlans()
     }
     
     func saveRecipe(_ recipe: Recipe) {
@@ -65,6 +68,57 @@ class RecipeManager: ObservableObject {
             print("❌ Failed to load recipes: \(error.localizedDescription)")
             // If decoding fails, fall back to debug seed data (in debug builds)
             seedDebugRecipesIfNeeded()
+        }
+    }
+
+    // MARK: - Meal Plan Favourites
+    
+    func saveMealPlan(_ recipes: [Recipe]) {
+        // Avoid saving empty plans
+        guard !recipes.isEmpty else { return }
+        
+        // Avoid duplicates with identical recipe sets
+        let newSet = Set(recipes.map { $0.id })
+        if favouritePlans.contains(where: { Set($0.recipes.map { $0.id }) == newSet }) {
+            print("⚠️ Meal plan with same recipes already saved")
+            return
+        }
+        
+        let plan = MealPlan(recipes: recipes)
+        favouritePlans.append(plan)
+        persistMealPlans()
+        print("✅ Saved meal plan with \(recipes.count) recipes")
+    }
+    
+    func deleteMealPlan(_ plan: MealPlan) {
+        favouritePlans.removeAll { $0.id == plan.id }
+        persistMealPlans()
+    }
+    
+    private func persistMealPlans() {
+        do {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            let data = try encoder.encode(favouritePlans)
+            UserDefaults.standard.set(data, forKey: plansPersistenceKey)
+        } catch {
+            print("❌ Failed to save meal plans: \(error.localizedDescription)")
+        }
+    }
+    
+    private func loadMealPlans() {
+        guard let data = UserDefaults.standard.data(forKey: plansPersistenceKey) else {
+            print("ℹ️ No saved meal plans found")
+            return
+        }
+        
+        do {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            favouritePlans = try decoder.decode([MealPlan].self, from: data)
+            print("✅ Loaded \(favouritePlans.count) favourite meal plans")
+        } catch {
+            print("❌ Failed to load meal plans: \(error.localizedDescription)")
         }
     }
 

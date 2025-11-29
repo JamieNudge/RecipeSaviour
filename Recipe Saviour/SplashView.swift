@@ -5,7 +5,7 @@ struct SplashView: View {
     
     var body: some View {
         ZStack {
-            Color.white
+            RSTheme.Colors.background
                 .ignoresSafeArea()
             
             VStack(spacing: 20) {
@@ -18,8 +18,7 @@ struct SplashView: View {
                     }
                 
                 Text("Recipe Saviour")
-                    .font(.title.bold())
-                    .foregroundColor(.primary)
+                    .rsAppTitle()
             }
         }
         .drawingGroup() // Optimize rendering

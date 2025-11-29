@@ -8,6 +8,8 @@ struct Recipe_SaviourApp: App {
         WindowGroup {
             ZStack {
                 ContentView()
+                    .tint(RSTheme.Colors.primary)
+                    .background(RSTheme.Colors.background)
                 
                 if showingSplash {
                     SplashView()

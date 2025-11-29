@@ -5,14 +5,20 @@ struct MealPlannerView: View {
     @State private var selectedRecipes: Set<UUID> = []
     @State private var showingShoppingList = false
     @State private var autoMealCount: Int = 3
+    @State private var lastGeneratedPlan: Set<UUID> = []
     
     var body: some View {
         NavigationView {
-            VStack(spacing: 0) {
-                if recipeManager.savedRecipes.isEmpty {
-                    emptyStateView
-                } else {
-                    recipeSelectionView
+            ZStack {
+                RSTheme.Colors.background
+                    .ignoresSafeArea()
+                
+                VStack(spacing: 0) {
+                    if recipeManager.savedRecipes.isEmpty {
+                        emptyStateView
+                    } else {
+                        recipeSelectionView
+                    }
                 }
             }
             .navigationTitle("Meal Planner")
@@ -26,7 +32,7 @@ struct MealPlannerView: View {
                 }
             }
             .sheet(isPresented: $showingShoppingList) {
-                ShoppingListView(recipes: selectedRecipesArray)
+                ShoppingListView(recipes: selectedRecipesArray, allowSaving: true)
                     .environmentObject(recipeManager)
             }
         }
@@ -37,32 +43,30 @@ struct MealPlannerView: View {
     }
     
     private var emptyStateView: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: RSTheme.Spacing.lg) {
             Image(systemName: "calendar.badge.plus")
                 .font(.system(size: 60))
-                .foregroundColor(.secondary)
+                .foregroundColor(RSTheme.Colors.primary.opacity(0.7))
             Text("No saved recipes yet")
-                .font(.title2)
-                .foregroundColor(.secondary)
+                .font(RSTheme.Typography.sectionTitle)
+                .foregroundColor(RSTheme.Colors.textPrimary)
             Text("Save some recipes first to start meal planning")
-                .font(.footnote)
-                .foregroundColor(.secondary)
+                .rsSecondary()
                 .multilineTextAlignment(.center)
         }
         .padding()
     }
     
     private var recipeSelectionView: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: RSTheme.Spacing.lg) {
+            VStack(alignment: .leading, spacing: RSTheme.Spacing.sm) {
                 Text("Plan your week's meals")
-                    .font(.headline)
+                    .rsSectionTitle()
                 Text("We'll pick meals with variety but shared ingredients to make shopping easier")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
+                    .rsSecondary()
 
                 // Auto-planning controls
-                HStack(spacing: 12) {
+                HStack(spacing: RSTheme.Spacing.md) {
                     let maxMeals = max(1, min(7, recipeManager.savedRecipes.count))
                     Stepper("Meals this week: \(autoMealCount)", value: $autoMealCount, in: 1...maxMeals)
                         .onChange(of: recipeManager.savedRecipes.count) { newCount in
@@ -74,6 +78,9 @@ struct MealPlannerView: View {
 
                     Button {
                         generateSmartPlan()
+                        if !selectedRecipesArray.isEmpty {
+                            showingShoppingList = true
+                        }
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: "sparkles")
@@ -81,6 +88,7 @@ struct MealPlannerView: View {
                         }
                     }
                     .buttonStyle(.borderedProminent)
+                    .tint(RSTheme.Colors.accent)
                     .disabled(recipeManager.savedRecipes.count < 1)
                 }
                 .font(.footnote)
@@ -90,37 +98,40 @@ struct MealPlannerView: View {
             List {
                 ForEach(recipeManager.savedRecipes.sorted(by: { $0.dateSaved > $1.dateSaved })) { recipe in
                     Button(action: {
-                        if selectedRecipes.contains(recipe.id) {
-                            selectedRecipes.remove(recipe.id)
-                        } else {
-                            selectedRecipes.insert(recipe.id)
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            if selectedRecipes.contains(recipe.id) {
+                                selectedRecipes.remove(recipe.id)
+                            } else {
+                                selectedRecipes.insert(recipe.id)
+                            }
                         }
                     }) {
-                        HStack {
+                        HStack(spacing: RSTheme.Spacing.md) {
                             Image(systemName: selectedRecipes.contains(recipe.id) ? "checkmark.circle.fill" : "circle")
-                                .foregroundColor(selectedRecipes.contains(recipe.id) ? .blue : .secondary)
+                                .foregroundColor(selectedRecipes.contains(recipe.id) ? RSTheme.Colors.accent : .secondary)
                                 .font(.title3)
                             
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(recipe.title)
                                     .font(.headline)
                                 Text("\(recipe.ingredients.count) ingredients")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .rsCaption()
                             }
                         }
                     }
                     .buttonStyle(.plain)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(RSTheme.Colors.background)
+            .listStyle(.insetGrouped)
             
             if !selectedRecipes.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: RSTheme.Spacing.sm) {
                     Text("\(selectedRecipesArray.count) meals selected")
-                        .font(.subheadline.weight(.semibold))
+                    .font(.subheadline.weight(.semibold))
                     Text("View your planned meals and full shopping list with all the shared ingredients.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    .rsCaption()
                         .fixedSize(horizontal: false, vertical: true)
                     
                     Button {
@@ -130,7 +141,7 @@ struct MealPlannerView: View {
                             .fontWeight(.semibold)
                             .frame(maxWidth: .infinity)
                             .padding()
-                            .background(Color.blue)
+                        .background(RSTheme.Colors.primary)
                             .foregroundColor(.white)
                             .cornerRadius(12)
                     }
@@ -169,49 +180,124 @@ struct MealPlannerView: View {
             }
             return
         }
-
-        // Choose a starting recipe whose ingredients overlap most with others
-        var scores: [Int] = Array(repeating: 0, count: recipes.count)
-        for i in 0..<recipes.count {
-            var total = 0
-            for j in 0..<recipes.count where j != i {
-                total += overlapScore(between: i, and: j)
+        
+        // For reasonably-sized libraries, search combinations to maximise shared ingredients.
+        // If too many recipes, fall back to greedy selection.
+        let useBruteForce = recipes.count <= 14 && targetCount > 1
+        
+        let chosenIndices: [Int]
+        
+        if useBruteForce {
+            // Score for a group of indices = sum of pairwise overlaps
+            func totalOverlapScore(for indices: [Int]) -> Int {
+                var score = 0
+                if indices.count < 2 { return 0 }
+                for i in 0..<(indices.count - 1) {
+                    for j in (i + 1)..<indices.count {
+                        score += overlapScore(between: indices[i], and: indices[j])
+                    }
+                }
+                return score
             }
-            scores[i] = total
-        }
-
-        guard let startIndex = scores.enumerated().max(by: { $0.element < $1.element })?.offset else {
-            return
-        }
-
-        var selectedIndices: [Int] = [startIndex]
-        var remaining = Set(0..<recipes.count)
-        remaining.remove(startIndex)
-
-        // Greedily add recipes that maximise overlap with the already selected set
-        while selectedIndices.count < targetCount, let nextIndex = remaining.max(by: { a, b in
-            let scoreA = selectedIndices.reduce(0) { $0 + overlapScore(between: a, and: $1) }
-            let scoreB = selectedIndices.reduce(0) { $0 + overlapScore(between: b, and: $1) }
-            if scoreA == scoreB {
-                // Tie-breaker: prefer the one with more ingredients
-                return ingredientSets[a].count < ingredientSets[b].count
+            
+            var bestCombos: [[Int]] = []
+            var bestScore = -1
+            
+            var current: [Int] = []
+            func generate(start: Int) {
+                if current.count == targetCount {
+                    let score = totalOverlapScore(for: current)
+                    if score > bestScore {
+                        bestScore = score
+                        bestCombos = [current]
+                    } else if score == bestScore {
+                        bestCombos.append(current)
+                    }
+                    return
+                }
+                guard start < recipes.count else { return }
+                
+                for i in start..<recipes.count {
+                    current.append(i)
+                    generate(start: i + 1)
+                    current.removeLast()
+                }
             }
-            return scoreA < scoreB
-        }) {
-            selectedIndices.append(nextIndex)
-            remaining.remove(nextIndex)
+            
+            generate(start: 0)
+            
+            // Choose the best combination; if there are multiple best, prefer one
+            // that differs from the last plan to give variety.
+            if !bestCombos.isEmpty {
+                var candidateSets: [Set<UUID>] = bestCombos.map { combo in
+                    Set(combo.map { recipes[$0].id })
+                }
+                
+                if candidateSets.count > 1, !lastGeneratedPlan.isEmpty {
+                    if let idx = candidateSets.firstIndex(where: { $0 != lastGeneratedPlan }) {
+                        chosenIndices = bestCombos[idx]
+                    } else {
+                        chosenIndices = bestCombos[0]
+                    }
+                } else {
+                    chosenIndices = bestCombos[0]
+                }
+            } else {
+                // Fallback: if for some reason no combo found, just take the first N
+                chosenIndices = Array(0..<targetCount)
+            }
+        } else {
+            // Greedy fallback for large libraries
+            var scores: [Int] = Array(repeating: 0, count: recipes.count)
+            for i in 0..<recipes.count {
+                var total = 0
+                for j in 0..<recipes.count where j != i {
+                    total += overlapScore(between: i, and: j)
+                }
+                scores[i] = total
+            }
+            
+            guard let startIndex = scores.enumerated().max(by: { $0.element < $1.element })?.offset else {
+                return
+            }
+            
+            var selectedIndices: [Int] = [startIndex]
+            var remaining = Set(0..<recipes.count)
+            remaining.remove(startIndex)
+            
+            while selectedIndices.count < targetCount,
+                  let nextIndex = remaining.max(by: { a, b in
+                      let scoreA = selectedIndices.reduce(0) { $0 + overlapScore(between: a, and: $1) }
+                      let scoreB = selectedIndices.reduce(0) { $0 + overlapScore(between: b, and: $1) }
+                      if scoreA == scoreB {
+                          return ingredientSets[a].count < ingredientSets[b].count
+                      }
+                      return scoreA < scoreB
+                  }) {
+                selectedIndices.append(nextIndex)
+                remaining.remove(nextIndex)
+            }
+            
+            chosenIndices = selectedIndices
         }
-
-        // Update selectedRecipes with the chosen plan
-        let chosenIDs = selectedIndices.map { recipes[$0].id }
-        selectedRecipes = Set(chosenIDs)
+        
+        let chosenSet = Set(chosenIndices.map { recipes[$0].id })
+        
+        withAnimation(.easeInOut) {
+            selectedRecipes = chosenSet
+        }
+        lastGeneratedPlan = chosenSet
     }
     
 }
 
 struct ShoppingListView: View {
     @Environment(\.dismiss) var dismiss
+    @EnvironmentObject var recipeManager: RecipeManager
     let recipes: [Recipe]
+    let allowSaving: Bool
+    
+    @State private var showingSavedAlert = false
     
     var body: some View {
         NavigationView {
@@ -223,21 +309,20 @@ struct ShoppingListView: View {
                             ForEach(recipes) { recipe in
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(recipe.title)
-                                        .font(.caption)
+                                        .rsCaption()
                                         .lineLimit(2)
                                     Text("\(recipe.ingredients.count) ingredients")
-                                        .font(.caption2)
-                                        .foregroundColor(.secondary)
+                                        .rsCaption()
                                 }
                                 .padding(8)
-                                .background(Color.blue.opacity(0.1))
+                                .background(RSTheme.Colors.card)
                                 .cornerRadius(8)
                                 .frame(width: 140)
                             }
                         }
                         .padding()
                     }
-                    .background(Color(UIColor.systemGroupedBackground))
+                    .background(RSTheme.Colors.background)
                     
                     Divider()
                 }
@@ -248,11 +333,27 @@ struct ShoppingListView: View {
             .navigationTitle("Meal Plan & Shopping List")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    if allowSaving {
+                        Button {
+                            recipeManager.saveMealPlan(recipes)
+                            showingSavedAlert = true
+                        } label: {
+                            Image(systemName: "star.circle.fill")
+                                .foregroundColor(RSTheme.Colors.accent)
+                        }
+                    }
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") {
                         dismiss()
                     }
                 }
+            }
+            .alert("Plan Saved", isPresented: $showingSavedAlert) {
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text("This meal plan has been added to Favourite Plans.")
             }
         }
     }
@@ -293,20 +394,19 @@ struct ShoppingListContentView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
                                 Text(ingredient.capitalized)
-                                    .font(.body)
+                                    .rsBody()
                                 Spacer()
                                 Text("\(count) recipes")
                                     .font(.caption)
                                     .foregroundColor(.white)
                                     .padding(.horizontal, 8)
                                     .padding(.vertical, 4)
-                                    .background(Color.green)
+                                    .background(RSTheme.Colors.accent)
                                     .cornerRadius(8)
                             }
                             if !isPreview {
                                 Text("Used in: \(ingredientAnalysis.unique[ingredient]?.joined(separator: ", ") ?? "")")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
+                                    .rsCaption()
                             }
                         }
                     }
@@ -331,10 +431,9 @@ struct ShoppingListContentView: View {
                     ForEach(uniqueIngredients, id: \.key) { ingredient, _ in
                         VStack(alignment: .leading, spacing: 4) {
                             Text(ingredient.capitalized)
-                                .font(.body)
+                                .rsBody()
                             Text("For: \(ingredientAnalysis.unique[ingredient]?.first ?? "")")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
+                                .rsCaption()
                         }
                     }
                 } header: {
