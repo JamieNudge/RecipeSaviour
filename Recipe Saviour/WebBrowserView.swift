@@ -7,6 +7,7 @@
 
 import SwiftUI
 import WebKit
+import Combine
 
 // MARK: - WebView (UIViewRepresentable wrapper for WKWebView)
 
