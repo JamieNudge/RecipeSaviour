@@ -69,7 +69,7 @@ struct MealPlannerView: View {
                 HStack(spacing: RSTheme.Spacing.md) {
                     let maxMeals = max(1, min(7, recipeManager.savedRecipes.count))
                     Stepper("Meals this week: \(autoMealCount)", value: $autoMealCount, in: 1...maxMeals)
-                        .onChange(of: recipeManager.savedRecipes.count) { newCount in
+                        .onChange(of: recipeManager.savedRecipes.count) { oldCount, newCount in
                             let newMax = max(1, min(7, newCount))
                             if autoMealCount > newMax {
                                 autoMealCount = newMax
@@ -359,44 +359,78 @@ struct ShoppingListView: View {
     }
 }
 
+// MARK: - Shopping List Item Model
+
+struct ShoppingListItem: Identifiable {
+    let id = UUID()
+    let normalizedKey: String       // For grouping/sorting
+    let displayText: String         // What to show in the list
+    let originalTexts: [String]     // All original ingredient lines
+    let recipeNames: [String]       // Which recipes use this
+    let quantity: Double?           // Combined quantity if parseable
+    let unit: String?               // Common unit
+    
+    var recipeCount: Int { recipeNames.count }
+    var isCommon: Bool { recipeCount > 1 }
+}
+
 struct ShoppingListContentView: View {
     let recipes: [Recipe]
     let isPreview: Bool
     
-    var ingredientAnalysis: (common: [String: Int], unique: [String: [String]]) {
-        var ingredientCount: [String: Int] = [:]
-        var ingredientToRecipes: [String: [String]] = [:]
+    /// Build a proper shopping list with combined quantities
+    var shoppingItems: [ShoppingListItem] {
+        var groups: [String: (originals: [String], recipes: [String], quantities: [(Double, String?)])] = [:]
         
         for recipe in recipes {
             for ingredient in recipe.ingredients {
                 guard let key = normalizedIngredientKey(from: ingredient) else { continue }
-                ingredientCount[key, default: 0] += 1
-                ingredientToRecipes[key, default: []].append(recipe.title)
+                
+                let parsed = parseQuantity(from: ingredient)
+                
+                if groups[key] == nil {
+                    groups[key] = (originals: [], recipes: [], quantities: [])
+                }
+                groups[key]!.originals.append(ingredient)
+                groups[key]!.recipes.append(recipe.title)
+                if let qty = parsed.quantity {
+                    groups[key]!.quantities.append((qty, parsed.unit))
+                }
             }
         }
         
-        return (ingredientCount, ingredientToRecipes)
+        return groups.map { key, data in
+            let (displayText, totalQty, unit) = buildDisplayText(
+                key: key,
+                originals: data.originals,
+                quantities: data.quantities
+            )
+            
+            return ShoppingListItem(
+                normalizedKey: key,
+                displayText: displayText,
+                originalTexts: data.originals,
+                recipeNames: data.recipes,
+                quantity: totalQty,
+                unit: unit
+            )
+        }.sorted { $0.recipeCount > $1.recipeCount || ($0.recipeCount == $1.recipeCount && $0.normalizedKey < $1.normalizedKey) }
     }
     
     var body: some View {
+        let commonItems = shoppingItems.filter { $0.isCommon }
+        let uniqueItems = shoppingItems.filter { !$0.isCommon }
+        
         List {
-            // Precompute groupings
-            let commonIngredients = ingredientAnalysis.common
-                .filter { $0.value > 1 }
-                .sorted { $0.value > $1.value }
-            let uniqueIngredients = ingredientAnalysis.common
-                .filter { $0.value == 1 }
-                .sorted { $0.key < $1.key }
-            
-            if !commonIngredients.isEmpty {
+            if !commonItems.isEmpty {
                 Section {
-                    ForEach(commonIngredients, id: \.key) { ingredient, count in
+                    ForEach(commonItems) { item in
                         VStack(alignment: .leading, spacing: 4) {
                             HStack {
-                                Text(ingredient.capitalized)
+                                Text(item.displayText)
                                     .rsBody()
                                 Spacer()
-                                Text("\(count) recipes")
+                                Text("\(item.recipeCount) recipes")
                                     .font(.caption)
                                     .foregroundColor(.white)
                                     .padding(.horizontal, 8)
@@ -405,20 +439,19 @@ struct ShoppingListContentView: View {
                                     .cornerRadius(8)
                             }
                             if !isPreview {
-                                Text("Used in: \(ingredientAnalysis.unique[ingredient]?.joined(separator: ", ") ?? "")")
+                                Text("For: \(item.recipeNames.joined(separator: ", "))")
                                     .rsCaption()
                             }
                         }
                     }
                 } header: {
-                    Text("Common Ingredients (\(commonIngredients.count))")
+                    Text("Common Ingredients (\(commonItems.count))")
                 } footer: {
                     Text("These ingredients are used in multiple recipes - buy in bulk!")
                 }
-            } else if !recipes.isEmpty {
-                // Make it obvious when there is *no* overlap yet
+            } else if !recipes.isEmpty && recipes.count > 1 {
                 Section {
-                    Text("These recipes don't share any ingredients yet.\n\nFor an easier shop, try swapping one of the meals or tap “Auto Plan” in Meal Planner.")
+                    Text("These recipes don't share any ingredients yet.\n\nFor an easier shop, try swapping one of the meals or tap \"Auto Plan\" in Meal Planner.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -426,56 +459,305 @@ struct ShoppingListContentView: View {
             }
             
             // Unique ingredients (used in 1 recipe only)
-            if !uniqueIngredients.isEmpty && !isPreview {
+            if !uniqueItems.isEmpty && !isPreview {
                 Section {
-                    ForEach(uniqueIngredients, id: \.key) { ingredient, _ in
+                    ForEach(uniqueItems) { item in
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(ingredient.capitalized)
+                            Text(item.displayText)
                                 .rsBody()
-                            Text("For: \(ingredientAnalysis.unique[ingredient]?.first ?? "")")
+                            Text("For: \(item.recipeNames.first ?? "")")
                                 .rsCaption()
                         }
                     }
                 } header: {
-                    Text("Unique Ingredients (\(uniqueIngredients.count))")
+                    Text(recipes.count == 1 ? "Ingredients (\(uniqueItems.count))" : "Unique Ingredients (\(uniqueItems.count))")
                 } footer: {
-                    Text("These ingredients are only needed for one recipe")
+                    if recipes.count > 1 {
+                        Text("These ingredients are only needed for one recipe")
+                    }
                 }
             }
             
-            // Summary
-            Section {
-                HStack {
-                    Text("Ingredients shared between recipes")
-                    Spacer()
-                    Text("\(commonIngredients.count)")
-                        .fontWeight(.bold)
-                }
-                HStack {
-                    Text("Recipes Selected")
-                    Spacer()
-                    Text("\(recipes.count)")
-                        .fontWeight(.bold)
+            // Summary (only for multiple recipes)
+            if recipes.count > 1 {
+                Section {
+                    HStack {
+                        Text("Ingredients shared between recipes")
+                        Spacer()
+                        Text("\(commonItems.count)")
+                            .fontWeight(.bold)
+                    }
+                    HStack {
+                        Text("Recipes Selected")
+                        Spacer()
+                        Text("\(recipes.count)")
+                            .fontWeight(.bold)
+                    }
                 }
             }
         }
     }
+    
+    /// Parse quantity and unit from an ingredient string
+    /// e.g., "2 chicken breasts" → (2.0, nil), "250ml milk" → (250.0, "ml")
+    private func parseQuantity(from ingredient: String) -> (quantity: Double?, unit: String?) {
+        let text = ingredient.lowercased()
+        
+        // Match patterns like "2", "2.5", "1/2", "½", "1½"
+        let fractionMap: [Character: Double] = ["½": 0.5, "⅓": 0.333, "⅔": 0.667, "¼": 0.25, "¾": 0.75]
+        
+        var quantity: Double? = nil
+        var unit: String? = nil
+        
+        // Try to find a number at the start
+        let tokens = text.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+        guard let firstToken = tokens.first else { return (nil, nil) }
+        
+        // Check for unicode fractions
+        if let fractionValue = fractionMap[firstToken.first!], firstToken.count == 1 {
+            quantity = fractionValue
+        }
+        // Check for "1½" style
+        else if firstToken.count >= 2, let lastChar = firstToken.last, let fractionValue = fractionMap[lastChar] {
+            if let wholeNumber = Double(String(firstToken.dropLast())) {
+                quantity = wholeNumber + fractionValue
+            }
+        }
+        // Check for "1/2" style fractions
+        else if firstToken.contains("/") {
+            let parts = firstToken.split(separator: "/")
+            if parts.count == 2, let num = Double(parts[0]), let denom = Double(parts[1]), denom != 0 {
+                quantity = num / denom
+            }
+        }
+        // Check for range like "6-8"
+        else if firstToken.contains("-") {
+            let parts = firstToken.split(separator: "-")
+            if parts.count == 2, let low = Double(parts[0]), let high = Double(parts[1]) {
+                quantity = (low + high) / 2  // Use average for ranges
+            }
+        }
+        // Regular number
+        else if let num = Double(firstToken) {
+            quantity = num
+        }
+        
+        // Try to find unit in second token
+        if tokens.count >= 2 {
+            let unitCandidates: Set<String> = [
+                "g", "kg", "gram", "grams",
+                "ml", "l", "litre", "litres", "liter", "liters",
+                "tbsp", "tablespoon", "tablespoons",
+                "tsp", "teaspoon", "teaspoons",
+                "cup", "cups",
+                "oz", "ounce", "ounces",
+                "lb", "lbs", "pound", "pounds"
+            ]
+            let secondToken = tokens[1].trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+            if unitCandidates.contains(secondToken) {
+                unit = secondToken
+            }
+        }
+        
+        return (quantity, unit)
+    }
+    
+    /// Build display text for a shopping list item
+    /// For single items: clean up original text (remove prep methods)
+    /// For multiple: try to combine quantities
+    private func buildDisplayText(key: String, originals: [String], quantities: [(Double, String?)]) -> (String, Double?, String?) {
+        // Single ingredient: clean up the original text
+        if originals.count == 1 {
+            let cleaned = cleanForShoppingList(originals[0])
+            return (cleaned, quantities.first?.0, quantities.first?.1)
+        }
+        
+        // Multiple ingredients with the same key: try to combine
+        // First, check if we can sum quantities
+        if !quantities.isEmpty {
+            let total = quantities.reduce(0.0) { $0 + $1.0 }
+            let commonUnit = quantities.compactMap { $0.1 }.first
+            
+            // Build combined display: "5 chicken breasts" or "750g flour"
+            let formattedQty = total.truncatingRemainder(dividingBy: 1) == 0 
+                ? String(Int(total)) 
+                : String(format: "%.1f", total)
+            
+            // Extract the ingredient name (without quantity/unit) from original
+            let baseName = extractIngredientName(from: originals[0])
+            
+            if let unit = commonUnit {
+                return ("\(formattedQty)\(unit) \(baseName)", total, unit)
+            } else {
+                // Pluralize if quantity > 1
+                let displayName = total > 1 ? pluralize(baseName) : baseName
+                return ("\(formattedQty) \(displayName)", total, nil)
+            }
+        }
+        
+        // Can't combine quantities: show cleaned original
+        return (cleanForShoppingList(originals[0]), nil, nil)
+    }
+    
+    /// Clean an ingredient string for shopping list display
+    /// Removes prep methods like "beaten", "chopped", "for glazing" etc.
+    /// Keeps: quantity + unit + ingredient name
+    /// e.g., "1 free-range egg, beaten, for glazing" → "1 free-range egg"
+    private func cleanForShoppingList(_ ingredient: String) -> String {
+        var text = ingredient
+        
+        // Remove parenthetical content like "(optional)" or "(alternatively use lard)"
+        while let open = text.firstIndex(of: "(") {
+            if let close = text[open...].firstIndex(of: ")") {
+                text.removeSubrange(open...close)
+            } else {
+                break
+            }
+        }
+        
+        // Split on comma - prep instructions often come after comma
+        // e.g., "1 egg, beaten, for glazing" → take "1 egg"
+        let commaParts = text.components(separatedBy: ",")
+        if commaParts.count > 1 {
+            // Check if first part has the core ingredient
+            let firstPart = commaParts[0].trimmingCharacters(in: .whitespaces)
+            if containsIngredientNoun(firstPart) {
+                text = firstPart
+            }
+        }
+        
+        // Remove trailing prep phrases that start with "for"
+        // e.g., "egg for glazing" → "egg"
+        if let forRange = text.range(of: " for ", options: .caseInsensitive) {
+            text = String(text[..<forRange.lowerBound])
+        }
+        
+        // Remove standalone prep words at the end
+        let prepWords = [
+            "beaten", "whisked", "chopped", "diced", "minced", "sliced", "crushed",
+            "peeled", "grated", "shredded", "melted", "softened", "sifted",
+            "halved", "quartered", "cubed", "mashed", "mixed"
+        ]
+        
+        var words = text.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+        
+        // Remove prep words from the end
+        while let lastWord = words.last?.lowercased().trimmingCharacters(in: .punctuationCharacters),
+              prepWords.contains(lastWord) {
+            words.removeLast()
+        }
+        
+        text = words.joined(separator: " ")
+        
+        // Clean up any trailing commas or punctuation
+        text = text.trimmingCharacters(in: .whitespaces)
+        while text.hasSuffix(",") || text.hasSuffix(";") {
+            text = String(text.dropLast()).trimmingCharacters(in: .whitespaces)
+        }
+        
+        return text.isEmpty ? ingredient : text
+    }
+    
+    /// Check if a string contains an actual ingredient noun (not just numbers/units)
+    private func containsIngredientNoun(_ text: String) -> Bool {
+        let units: Set<String> = [
+            "g", "kg", "ml", "l", "tbsp", "tsp", "cup", "cups", "oz", "lb", "fl"
+        ]
+        let fractionChars = CharacterSet(charactersIn: "½⅓⅔¼¾/0123456789.-")
+        
+        let words = text.lowercased().components(separatedBy: .whitespaces)
+        for word in words {
+            let cleaned = word.trimmingCharacters(in: .punctuationCharacters)
+            if cleaned.isEmpty { continue }
+            if units.contains(cleaned) { continue }
+            if cleaned.unicodeScalars.allSatisfy({ fractionChars.contains($0) }) { continue }
+            // Found a real word
+            return true
+        }
+        return false
+    }
+    
+    /// Extract just the ingredient name without quantity/unit (for combining)
+    private func extractIngredientName(from ingredient: String) -> String {
+        // First clean it
+        let cleaned = cleanForShoppingList(ingredient).lowercased()
+        
+        let tokens = cleaned.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+        
+        // Skip leading numbers, fractions, units
+        let units: Set<String> = [
+            "g", "kg", "gram", "grams", "ml", "l", "litre", "litres",
+            "tbsp", "tablespoon", "tablespoons", "tsp", "teaspoon", "teaspoons",
+            "cup", "cups", "oz", "ounce", "ounces", "lb", "lbs", "fl"
+        ]
+        let fractionChars = CharacterSet(charactersIn: "½⅓⅔¼¾/0123456789.-")
+        
+        var nameTokens: [String] = []
+        var foundName = false
+        
+        for token in tokens {
+            // Skip if it looks like a number or fraction
+            if !foundName && token.unicodeScalars.allSatisfy({ fractionChars.contains($0) }) {
+                continue
+            }
+            // Skip units
+            if !foundName && units.contains(token) {
+                continue
+            }
+            foundName = true
+            nameTokens.append(token)
+        }
+        
+        return nameTokens.joined(separator: " ")
+    }
+    
+    /// Simple pluralization
+    private func pluralize(_ word: String) -> String {
+        let lower = word.lowercased()
+        
+        // Already plural?
+        if lower.hasSuffix("s") && !lower.hasSuffix("ss") {
+            return word
+        }
+        
+        // Common irregular plurals
+        let irregulars: [String: String] = [
+            "leaf": "leaves", "loaf": "loaves", "half": "halves",
+            "potato": "potatoes", "tomato": "tomatoes",
+            "berry": "berries", "cherry": "cherries"
+        ]
+        if let plural = irregulars[lower] {
+            return plural
+        }
+        
+        // Words ending in y → ies (but not if vowel before y)
+        if lower.hasSuffix("y") && lower.count > 2 {
+            let beforeY = lower[lower.index(lower.endIndex, offsetBy: -2)]
+            if !"aeiou".contains(beforeY) {
+                return String(word.dropLast()) + "ies"
+            }
+        }
+        
+        // Default: add s
+        return word + "s"
+    }
 }
 
-// MARK: - Ingredient Normalisation Helper
+// MARK: - Ingredient Normalisation Helper (for grouping only)
 
-/// Turn a free-text ingredient line into a coarse "ingredient key"
-/// so that similar lines (e.g. "2 tbsp soy sauce" vs "1 tbsp light soy sauce")
-/// are treated as the same base ingredient ("soy sauce").
+/// Turn a free-text ingredient line into a coarse "ingredient key" for GROUPING purposes.
+/// This is used to match similar ingredients across recipes (e.g., "2 chicken breasts" 
+/// and "3 free-range chicken breasts" should group together as "chicken breast").
+/// The key is NOT displayed - original text is shown in the shopping list.
 fileprivate func normalizedIngredientKey(from raw: String) -> String? {
-    // Lowercase and strip parentheses content to reduce noise
     var text = raw.lowercased()
     
-    // Remove simple parenthetical notes like "(optional)"
-    if let open = text.firstIndex(of: "(") {
-        let afterOpen = text.index(after: open)
-        if let close = text[afterOpen...].firstIndex(of: ")") {
+    // Remove parenthetical content like "(optional)" or "(alternatively use...)"
+    while let open = text.firstIndex(of: "(") {
+        if let close = text[open...].firstIndex(of: ")") {
             text.removeSubrange(open...close)
+        } else {
+            break
         }
     }
     
@@ -483,87 +765,108 @@ fileprivate func normalizedIngredientKey(from raw: String) -> String? {
     let allowed = CharacterSet.letters.union(.whitespaces)
     text = String(text.unicodeScalars.filter { allowed.contains($0) })
     
-    let units: Set<String> = [
-        "g","kg","gram","grams",
-        "ml","l",
-        "tbsp","tablespoon","tablespoons",
-        "tsp","teaspoon","teaspoons",
-        "cup","cups",
-        "oz","ounce","ounces",
-        "clove","cloves",
-        "slice","slices",
-        "can","cans",
-        "packet","packets","tin","tins"
+    // Words to skip when building the grouping key
+    let skipWords: Set<String> = [
+        // Units
+        "g", "kg", "gram", "grams", "ml", "l", "litre", "litres", "liter", "liters",
+        "tbsp", "tablespoon", "tablespoons", "tsp", "teaspoon", "teaspoons",
+        "cup", "cups", "oz", "ounce", "ounces", "fl", "lb", "lbs", "pound", "pounds",
+        "slice", "slices", "can", "cans", "packet", "packets", "tin", "tins",
+        "bunch", "bunches", "handful", "handfuls", "pinch", "pinches", "clove", "cloves",
+        // Descriptors
+        "fresh", "freshly", "dried", "chopped", "sliced", "diced", "minced", "crushed",
+        "peeled", "grated", "shredded", "cooked", "uncooked", "steamed", "boiled", 
+        "fried", "roasted", "baked", "beaten", "whisked", "mixed", "mashed", "softened",
+        "melted", "sifted", "cubed", "halved", "quartered",
+        "cold", "warm", "hot", "leftover", "leftovers", "frozen", "room", "temperature", "chilled",
+        "large", "small", "medium", "extra", "fine", "coarse", "roughly", "finely", 
+        "thinly", "thickly", "lightly", "whole", "half", "quarter",
+        "to", "taste", "of", "and", "or", "from", "for", "the", "a", "an", "about",
+        "approx", "approximately", "around", "plus", "into", "with", "on", "in", "as",
+        "needed", "some", "few", "optional", "preferably", "alternatively", "use", "more",
+        "free", "range", "plain", "light", "dark", "good", "quality"
     ]
     
-    let descriptors: Set<String> = [
-        // Prep / texture
-        "fresh","freshly","dried","chopped","sliced","diced","minced","crushed",
-        "peeled","grated","shredded","cooked","uncooked","steamed","boiled","fried","roasted","baked",
-        "beaten","whisked","mixed","mashed",
-        // State / leftovers
-        "cold","warm","hot","leftover","leftovers","frozen",
-        // Size / amount adjectives
-        "large","small","medium","extra","fine","coarse","roughly","finely","thinly","thickly","lightly",
-        // Filler / stop-words
-        "to","taste","of","and","or","from","for","the","a","an","about","approx","approximately","around",
-        "plus","into","with","on","in",
-        // Time-ish
-        "yesterday","today","tomorrow",
-        // Misc
-        "optional","preferably"
+    // Purpose words that shouldn't be the key alone
+    let purposeWords: Set<String> = [
+        "glazing", "glaze", "coating", "topping", "garnish", "serving", "decoration", "dusting"
     ]
     
-    let tokens = text
-        .components(separatedBy: .whitespacesAndNewlines)
-        .map { $0.trimmingCharacters(in: .whitespaces) }
-        .filter { !$0.isEmpty }
+    let tokens = text.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
     
+    // Extract core ingredient words
     var core: [String] = []
     for token in tokens {
-        // Skip tokens that are measurement-ish or descriptive
-        if units.contains(token) || descriptors.contains(token) {
-            continue
-        }
-        // Skip pure numbers
-        if Double(token) != nil {
-            continue
-        }
-        // Keep this as a candidate noun-ish token
+        if skipWords.contains(token) { continue }
+        if Double(token) != nil { continue }
+        if purposeWords.contains(token) { continue }
         core.append(token)
+    }
+    
+    // If empty, try to find noun before "for"
+    if core.isEmpty {
+        var foundFor = false
+        for token in tokens.reversed() {
+            if token == "for" { foundFor = true; continue }
+            if foundFor && !skipWords.contains(token) && Double(token) == nil {
+                core.append(token)
+                break
+            }
+        }
     }
     
     guard !core.isEmpty else { return nil }
     
-    // Focus on the "tail" of the phrase, where the actual ingredient noun usually is.
-    func singularised(_ word: String) -> String {
-        // Very light singularisation for simple plurals: "eggs" -> "egg", "peas" -> "pea"
-        if word.hasSuffix("es"), word.count > 4 {
-            return String(word.dropLast(2))
+    // Singularize for consistent grouping
+    func singularize(_ word: String) -> String {
+        let irregulars: [String: String] = [
+            "leaves": "leaf", "loaves": "loaf", "halves": "half",
+            "potatoes": "potato", "tomatoes": "tomato",
+            "berries": "berry", "cherries": "cherry", "anchovies": "anchovy",
+            "breasts": "breast", "thighs": "thigh", "wings": "wing", "legs": "leg"
+        ]
+        if let irregular = irregulars[word] { return irregular }
+        
+        if word.hasSuffix("ies") && word.count > 4 {
+            return String(word.dropLast(3)) + "y"
         }
-        if word.hasSuffix("s"), word.count > 3 {
+        if word.hasSuffix("ves") && word.count > 4 {
+            return String(word.dropLast(3)) + "f"
+        }
+        if word.hasSuffix("es") && word.count > 4 {
+            let base = String(word.dropLast(2))
+            if base.hasSuffix("s") || base.hasSuffix("x") || base.hasSuffix("z") ||
+               base.hasSuffix("ch") || base.hasSuffix("sh") {
+                return base
+            }
+        }
+        if word.hasSuffix("s") && word.count > 3 && !word.hasSuffix("ss") {
             return String(word.dropLast())
         }
         return word
     }
     
-    let lastRaw = core.last!
-    let last = singularised(lastRaw)
-    let secondLastRaw: String? = core.count >= 2 ? core[core.count - 2] : nil
-    let secondLast = secondLastRaw.map(singularised)
+    // Build key from last 2-3 meaningful words (where the actual ingredient usually is)
+    let normalized = core.map { singularize($0) }
     
-    // For generic container words like "sauce" or "broth", include one word before it
-    let compoundTails: Set<String> = ["sauce","powder","paste","stock","broth","cream","cheese"]
+    // Compound tails that need preceding context
+    let compoundTails: Set<String> = [
+        "sauce", "powder", "paste", "stock", "broth", "cream", "cheese",
+        "cube", "leaf", "bean", "seed", "oil", "flour", "sugar", "milk",
+        "juice", "zest", "peel", "extract", "essence", "breast", "thigh", "wing", "leg"
+    ]
     
-    var keyParts: [String] = []
-    if compoundTails.contains(last), let secondLast = secondLast {
-        keyParts.append(secondLast)
-        keyParts.append(last)
+    let lastIdx = normalized.count - 1
+    let lastWord = normalized[lastIdx]
+    
+    if compoundTails.contains(lastWord) && normalized.count >= 2 {
+        let startIdx = max(0, lastIdx - 2)
+        return Array(normalized[startIdx...lastIdx]).joined(separator: " ")
+    } else if normalized.count >= 2 {
+        let startIdx = max(0, lastIdx - 1)
+        return Array(normalized[startIdx...lastIdx]).joined(separator: " ")
     } else {
-        keyParts.append(last)
+        return lastWord
     }
-    
-    let key = keyParts.joined(separator: " ")
-    return key.trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
