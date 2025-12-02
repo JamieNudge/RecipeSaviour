@@ -49,6 +49,7 @@ struct ExtractRecipeView: View {
     @State private var recipe: Recipe?
     @State private var errorMessage: String?
     @State private var showingDisclaimer = false
+    @State private var showingBrowser = false
 
     var body: some View {
         NavigationView {
@@ -61,10 +62,11 @@ struct ExtractRecipeView: View {
                         VStack(alignment: .leading, spacing: RSTheme.Spacing.sm) {
                             Text("Save recipes from the endless waffle")
                                 .rsSectionTitle()
-                            Text("Paste a recipe link and we'll keep only the ingredients and method so you can actually cook.")
+                            Text("Paste a link or browse recipe websites directly.")
                                 .rsSecondary()
                         }
 
+                        // URL Input Row
                         VStack(spacing: RSTheme.Spacing.sm) {
                             HStack {
                                 Image(systemName: "link.circle.fill")
@@ -99,6 +101,32 @@ struct ExtractRecipeView: View {
                             .cornerRadius(14)
                             .shadow(color: Color.black.opacity(0.03), radius: 6, x: 0, y: 3)
                         }
+                        
+                        // Browse Button
+                        Button(action: {
+                            showingBrowser = true
+                        }) {
+                            HStack {
+                                Image(systemName: "safari")
+                                    .font(.title2)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Browse Recipe Websites")
+                                        .font(.headline)
+                                    Text("Find recipes and extract with one tap")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "chevron.right")
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding()
+                            .background(RSTheme.Colors.card)
+                            .cornerRadius(14)
+                            .shadow(color: Color.black.opacity(0.03), radius: 6, x: 0, y: 3)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundColor(RSTheme.Colors.primary)
 
                         if let errorMessage {
                             Text(errorMessage)
@@ -116,7 +144,7 @@ struct ExtractRecipeView: View {
                             VStack(alignment: .leading, spacing: RSTheme.Spacing.sm) {
                                 Text("No recipe yet")
                                     .font(.headline)
-                                Text("Paste a link and hit return to see it without the life story.")
+                                Text("Paste a link or browse to find something delicious.")
                                     .rsSecondary()
                             }
                         }
@@ -149,6 +177,12 @@ struct ExtractRecipeView: View {
             }
             .sheet(isPresented: $showingDisclaimer) {
                 DisclaimerView(isPresented: $showingDisclaimer)
+            }
+            .fullScreenCover(isPresented: $showingBrowser) {
+                BrowserView(isPresented: $showingBrowser) { extractedURL in
+                    urlString = extractedURL.absoluteString
+                    Task { await fetchRecipe() }
+                }
             }
             .onTapGesture {
                 hideKeyboard()
