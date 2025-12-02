@@ -237,6 +237,7 @@ struct RecipeView: View {
     let showSaveButton: Bool
     
     @State private var showingSavedAlert = false
+    @State private var showingShareSheet = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: RSTheme.Spacing.lg) {
@@ -244,6 +245,17 @@ struct RecipeView: View {
                 Text(recipe.title)
                     .font(RSTheme.Typography.sectionTitle)
                 Spacer()
+                
+                // Share button
+                Button(action: {
+                    showingShareSheet = true
+                }) {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.title2)
+                        .foregroundColor(RSTheme.Colors.primary)
+                }
+                .buttonStyle(ShareButtonStyle())
+                
                 if showSaveButton {
                     Button(action: {
                         recipeManager.saveRecipe(recipe)
@@ -309,6 +321,9 @@ struct RecipeView: View {
             Button("OK", role: .cancel) { }
         } message: {
             Text("\(recipe.title) has been added to your collection.")
+        }
+        .sheet(isPresented: $showingShareSheet) {
+            ShareSheet(items: [ShareHelper.formatRecipe(recipe)])
         }
     }
 }
@@ -377,21 +392,46 @@ struct SavedRecipesView: View {
             }
             .navigationTitle("My Recipes")
             .sheet(item: $selectedRecipe) { recipe in
-                NavigationView {
-                    ScrollView {
-                        RecipeView(recipe: recipe, showSaveButton: false)
-                            .padding()
-                    }
-                    .navigationTitle("Recipe")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .navigationBarTrailing) {
-                            Button("Done") {
-                                selectedRecipe = nil
-                            }
-                        }
+                RecipeDetailSheet(recipe: recipe, onDismiss: { selectedRecipe = nil })
+                    .environmentObject(recipeManager)
+            }
+        }
+    }
+}
+
+// MARK: - Recipe Detail Sheet with Share Button
+
+struct RecipeDetailSheet: View {
+    @EnvironmentObject var recipeManager: RecipeManager
+    let recipe: Recipe
+    let onDismiss: () -> Void
+    
+    @State private var showingShareSheet = false
+    
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                RecipeView(recipe: recipe, showSaveButton: false)
+                    .padding()
+            }
+            .navigationTitle("Recipe")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(action: {
+                        showingShareSheet = true
+                    }) {
+                        Image(systemName: "square.and.arrow.up")
                     }
                 }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        onDismiss()
+                    }
+                }
+            }
+            .sheet(isPresented: $showingShareSheet) {
+                ShareSheet(items: [ShareHelper.formatRecipe(recipe)])
             }
         }
     }

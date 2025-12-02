@@ -298,6 +298,18 @@ struct ShoppingListView: View {
     let allowSaving: Bool
     
     @State private var showingSavedAlert = false
+    @State private var showingShareSheet = false
+    @State private var shareMode: ShareMode = .shoppingList
+    
+    enum ShareMode {
+        case shoppingList
+        case mealPlan
+    }
+    
+    /// Compute shopping items for sharing (same logic as ShoppingListContentView)
+    private var shoppingItems: [ShoppingListItem] {
+        ShoppingListItemBuilder.buildItems(from: recipes)
+    }
     
     var body: some View {
         NavigationView {
@@ -334,13 +346,37 @@ struct ShoppingListView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    if allowSaving {
-                        Button {
-                            recipeManager.saveMealPlan(recipes)
-                            showingSavedAlert = true
+                    HStack(spacing: 12) {
+                        if allowSaving {
+                            Button {
+                                recipeManager.saveMealPlan(recipes)
+                                showingSavedAlert = true
+                            } label: {
+                                Image(systemName: "star.circle.fill")
+                                    .foregroundColor(RSTheme.Colors.accent)
+                            }
+                        }
+                        
+                        // Share menu
+                        Menu {
+                            Button(action: {
+                                shareMode = .shoppingList
+                                showingShareSheet = true
+                            }) {
+                                Label("Share Shopping List", systemImage: "cart")
+                            }
+                            
+                            if recipes.count > 1 {
+                                Button(action: {
+                                    shareMode = .mealPlan
+                                    showingShareSheet = true
+                                }) {
+                                    Label("Share Meal Plan + List", systemImage: "list.bullet.rectangle")
+                                }
+                            }
                         } label: {
-                            Image(systemName: "star.circle.fill")
-                                .foregroundColor(RSTheme.Colors.accent)
+                            Image(systemName: "square.and.arrow.up")
+                                .foregroundColor(RSTheme.Colors.primary)
                         }
                     }
                 }
@@ -354,6 +390,17 @@ struct ShoppingListView: View {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text("This meal plan has been added to Favourite Plans.")
+            }
+            .sheet(isPresented: $showingShareSheet) {
+                let shareText: String = {
+                    switch shareMode {
+                    case .shoppingList:
+                        return ShareHelper.formatShoppingList(items: shoppingItems, recipes: recipes)
+                    case .mealPlan:
+                        return ShareHelper.formatMealPlan(recipes: recipes, shoppingItems: shoppingItems)
+                    }
+                }()
+                ShareSheet(items: [shareText])
             }
         }
     }
@@ -374,12 +421,10 @@ struct ShoppingListItem: Identifiable {
     var isCommon: Bool { recipeCount > 1 }
 }
 
-struct ShoppingListContentView: View {
-    let recipes: [Recipe]
-    let isPreview: Bool
-    
-    /// Build a proper shopping list with combined quantities
-    var shoppingItems: [ShoppingListItem] {
+// MARK: - Shopping List Item Builder (shared logic)
+
+enum ShoppingListItemBuilder {
+    static func buildItems(from recipes: [Recipe]) -> [ShoppingListItem] {
         var groups: [String: (originals: [String], recipes: [String], quantities: [(Double, String?)])] = [:]
         
         for recipe in recipes {
@@ -415,6 +460,212 @@ struct ShoppingListContentView: View {
                 unit: unit
             )
         }.sorted { $0.recipeCount > $1.recipeCount || ($0.recipeCount == $1.recipeCount && $0.normalizedKey < $1.normalizedKey) }
+    }
+    
+    /// Parse quantity and unit from an ingredient string
+    static func parseQuantity(from ingredient: String) -> (quantity: Double?, unit: String?) {
+        let text = ingredient.lowercased()
+        
+        let fractionMap: [Character: Double] = ["½": 0.5, "⅓": 0.333, "⅔": 0.667, "¼": 0.25, "¾": 0.75]
+        
+        var quantity: Double? = nil
+        var unit: String? = nil
+        
+        let tokens = text.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+        guard let firstToken = tokens.first else { return (nil, nil) }
+        
+        if let fractionValue = fractionMap[firstToken.first!], firstToken.count == 1 {
+            quantity = fractionValue
+        }
+        else if firstToken.count >= 2, let lastChar = firstToken.last, let fractionValue = fractionMap[lastChar] {
+            if let wholeNumber = Double(String(firstToken.dropLast())) {
+                quantity = wholeNumber + fractionValue
+            }
+        }
+        else if firstToken.contains("/") {
+            let parts = firstToken.split(separator: "/")
+            if parts.count == 2, let num = Double(parts[0]), let denom = Double(parts[1]), denom != 0 {
+                quantity = num / denom
+            }
+        }
+        else if firstToken.contains("-") {
+            let parts = firstToken.split(separator: "-")
+            if parts.count == 2, let low = Double(parts[0]), let high = Double(parts[1]) {
+                quantity = (low + high) / 2
+            }
+        }
+        else if let num = Double(firstToken) {
+            quantity = num
+        }
+        
+        if tokens.count >= 2 {
+            let unitCandidates: Set<String> = [
+                "g", "kg", "gram", "grams", "ml", "l", "litre", "litres", "liter", "liters",
+                "tbsp", "tablespoon", "tablespoons", "tsp", "teaspoon", "teaspoons",
+                "cup", "cups", "oz", "ounce", "ounces", "lb", "lbs", "pound", "pounds"
+            ]
+            let secondToken = tokens[1].trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+            if unitCandidates.contains(secondToken) {
+                unit = secondToken
+            }
+        }
+        
+        return (quantity, unit)
+    }
+    
+    /// Build display text for a shopping list item
+    static func buildDisplayText(key: String, originals: [String], quantities: [(Double, String?)]) -> (String, Double?, String?) {
+        if originals.count == 1 {
+            let cleaned = cleanForShoppingList(originals[0])
+            return (cleaned, quantities.first?.0, quantities.first?.1)
+        }
+        
+        if !quantities.isEmpty {
+            let total = quantities.reduce(0.0) { $0 + $1.0 }
+            let commonUnit = quantities.compactMap { $0.1 }.first
+            
+            let formattedQty = total.truncatingRemainder(dividingBy: 1) == 0 
+                ? String(Int(total)) 
+                : String(format: "%.1f", total)
+            
+            let baseName = extractIngredientName(from: originals[0])
+            
+            if let unit = commonUnit {
+                return ("\(formattedQty)\(unit) \(baseName)", total, unit)
+            } else {
+                let displayName = total > 1 ? pluralize(baseName) : baseName
+                return ("\(formattedQty) \(displayName)", total, nil)
+            }
+        }
+        
+        return (cleanForShoppingList(originals[0]), nil, nil)
+    }
+    
+    /// Clean an ingredient string for shopping list display
+    static func cleanForShoppingList(_ ingredient: String) -> String {
+        var text = ingredient
+        
+        while let open = text.firstIndex(of: "(") {
+            if let close = text[open...].firstIndex(of: ")") {
+                text.removeSubrange(open...close)
+            } else {
+                break
+            }
+        }
+        
+        let commaParts = text.components(separatedBy: ",")
+        if commaParts.count > 1 {
+            let firstPart = commaParts[0].trimmingCharacters(in: .whitespaces)
+            if containsIngredientNoun(firstPart) {
+                text = firstPart
+            }
+        }
+        
+        if let forRange = text.range(of: " for ", options: .caseInsensitive) {
+            text = String(text[..<forRange.lowerBound])
+        }
+        
+        let prepWords = [
+            "beaten", "whisked", "chopped", "diced", "minced", "sliced", "crushed",
+            "peeled", "grated", "shredded", "melted", "softened", "sifted",
+            "halved", "quartered", "cubed", "mashed", "mixed"
+        ]
+        
+        var words = text.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+        
+        while let lastWord = words.last?.lowercased().trimmingCharacters(in: .punctuationCharacters),
+              prepWords.contains(lastWord) {
+            words.removeLast()
+        }
+        
+        text = words.joined(separator: " ")
+        
+        text = text.trimmingCharacters(in: .whitespaces)
+        while text.hasSuffix(",") || text.hasSuffix(";") {
+            text = String(text.dropLast()).trimmingCharacters(in: .whitespaces)
+        }
+        
+        return text.isEmpty ? ingredient : text
+    }
+    
+    static func containsIngredientNoun(_ text: String) -> Bool {
+        let units: Set<String> = ["g", "kg", "ml", "l", "tbsp", "tsp", "cup", "cups", "oz", "lb", "fl"]
+        let fractionChars = CharacterSet(charactersIn: "½⅓⅔¼¾/0123456789.-")
+        
+        let words = text.lowercased().components(separatedBy: .whitespaces)
+        for word in words {
+            let cleaned = word.trimmingCharacters(in: .punctuationCharacters)
+            if cleaned.isEmpty { continue }
+            if units.contains(cleaned) { continue }
+            if cleaned.unicodeScalars.allSatisfy({ fractionChars.contains($0) }) { continue }
+            return true
+        }
+        return false
+    }
+    
+    static func extractIngredientName(from ingredient: String) -> String {
+        let cleaned = cleanForShoppingList(ingredient).lowercased()
+        
+        let tokens = cleaned.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+        
+        let units: Set<String> = [
+            "g", "kg", "gram", "grams", "ml", "l", "litre", "litres",
+            "tbsp", "tablespoon", "tablespoons", "tsp", "teaspoon", "teaspoons",
+            "cup", "cups", "oz", "ounce", "ounces", "lb", "lbs", "fl"
+        ]
+        let fractionChars = CharacterSet(charactersIn: "½⅓⅔¼¾/0123456789.-")
+        
+        var nameTokens: [String] = []
+        var foundName = false
+        
+        for token in tokens {
+            if !foundName && token.unicodeScalars.allSatisfy({ fractionChars.contains($0) }) {
+                continue
+            }
+            if !foundName && units.contains(token) {
+                continue
+            }
+            foundName = true
+            nameTokens.append(token)
+        }
+        
+        return nameTokens.joined(separator: " ")
+    }
+    
+    static func pluralize(_ word: String) -> String {
+        let lower = word.lowercased()
+        
+        if lower.hasSuffix("s") && !lower.hasSuffix("ss") {
+            return word
+        }
+        
+        let irregulars: [String: String] = [
+            "leaf": "leaves", "loaf": "loaves", "half": "halves",
+            "potato": "potatoes", "tomato": "tomatoes",
+            "berry": "berries", "cherry": "cherries"
+        ]
+        if let plural = irregulars[lower] {
+            return plural
+        }
+        
+        if lower.hasSuffix("y") && lower.count > 2 {
+            let beforeY = lower[lower.index(lower.endIndex, offsetBy: -2)]
+            if !"aeiou".contains(beforeY) {
+                return String(word.dropLast()) + "ies"
+            }
+        }
+        
+        return word + "s"
+    }
+}
+
+struct ShoppingListContentView: View {
+    let recipes: [Recipe]
+    let isPreview: Bool
+    
+    /// Build a proper shopping list with combined quantities
+    var shoppingItems: [ShoppingListItem] {
+        ShoppingListItemBuilder.buildItems(from: recipes)
     }
     
     var body: some View {
@@ -496,250 +747,6 @@ struct ShoppingListContentView: View {
                 }
             }
         }
-    }
-    
-    /// Parse quantity and unit from an ingredient string
-    /// e.g., "2 chicken breasts" → (2.0, nil), "250ml milk" → (250.0, "ml")
-    private func parseQuantity(from ingredient: String) -> (quantity: Double?, unit: String?) {
-        let text = ingredient.lowercased()
-        
-        // Match patterns like "2", "2.5", "1/2", "½", "1½"
-        let fractionMap: [Character: Double] = ["½": 0.5, "⅓": 0.333, "⅔": 0.667, "¼": 0.25, "¾": 0.75]
-        
-        var quantity: Double? = nil
-        var unit: String? = nil
-        
-        // Try to find a number at the start
-        let tokens = text.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
-        guard let firstToken = tokens.first else { return (nil, nil) }
-        
-        // Check for unicode fractions
-        if let fractionValue = fractionMap[firstToken.first!], firstToken.count == 1 {
-            quantity = fractionValue
-        }
-        // Check for "1½" style
-        else if firstToken.count >= 2, let lastChar = firstToken.last, let fractionValue = fractionMap[lastChar] {
-            if let wholeNumber = Double(String(firstToken.dropLast())) {
-                quantity = wholeNumber + fractionValue
-            }
-        }
-        // Check for "1/2" style fractions
-        else if firstToken.contains("/") {
-            let parts = firstToken.split(separator: "/")
-            if parts.count == 2, let num = Double(parts[0]), let denom = Double(parts[1]), denom != 0 {
-                quantity = num / denom
-            }
-        }
-        // Check for range like "6-8"
-        else if firstToken.contains("-") {
-            let parts = firstToken.split(separator: "-")
-            if parts.count == 2, let low = Double(parts[0]), let high = Double(parts[1]) {
-                quantity = (low + high) / 2  // Use average for ranges
-            }
-        }
-        // Regular number
-        else if let num = Double(firstToken) {
-            quantity = num
-        }
-        
-        // Try to find unit in second token
-        if tokens.count >= 2 {
-            let unitCandidates: Set<String> = [
-                "g", "kg", "gram", "grams",
-                "ml", "l", "litre", "litres", "liter", "liters",
-                "tbsp", "tablespoon", "tablespoons",
-                "tsp", "teaspoon", "teaspoons",
-                "cup", "cups",
-                "oz", "ounce", "ounces",
-                "lb", "lbs", "pound", "pounds"
-            ]
-            let secondToken = tokens[1].trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
-            if unitCandidates.contains(secondToken) {
-                unit = secondToken
-            }
-        }
-        
-        return (quantity, unit)
-    }
-    
-    /// Build display text for a shopping list item
-    /// For single items: clean up original text (remove prep methods)
-    /// For multiple: try to combine quantities
-    private func buildDisplayText(key: String, originals: [String], quantities: [(Double, String?)]) -> (String, Double?, String?) {
-        // Single ingredient: clean up the original text
-        if originals.count == 1 {
-            let cleaned = cleanForShoppingList(originals[0])
-            return (cleaned, quantities.first?.0, quantities.first?.1)
-        }
-        
-        // Multiple ingredients with the same key: try to combine
-        // First, check if we can sum quantities
-        if !quantities.isEmpty {
-            let total = quantities.reduce(0.0) { $0 + $1.0 }
-            let commonUnit = quantities.compactMap { $0.1 }.first
-            
-            // Build combined display: "5 chicken breasts" or "750g flour"
-            let formattedQty = total.truncatingRemainder(dividingBy: 1) == 0 
-                ? String(Int(total)) 
-                : String(format: "%.1f", total)
-            
-            // Extract the ingredient name (without quantity/unit) from original
-            let baseName = extractIngredientName(from: originals[0])
-            
-            if let unit = commonUnit {
-                return ("\(formattedQty)\(unit) \(baseName)", total, unit)
-            } else {
-                // Pluralize if quantity > 1
-                let displayName = total > 1 ? pluralize(baseName) : baseName
-                return ("\(formattedQty) \(displayName)", total, nil)
-            }
-        }
-        
-        // Can't combine quantities: show cleaned original
-        return (cleanForShoppingList(originals[0]), nil, nil)
-    }
-    
-    /// Clean an ingredient string for shopping list display
-    /// Removes prep methods like "beaten", "chopped", "for glazing" etc.
-    /// Keeps: quantity + unit + ingredient name
-    /// e.g., "1 free-range egg, beaten, for glazing" → "1 free-range egg"
-    private func cleanForShoppingList(_ ingredient: String) -> String {
-        var text = ingredient
-        
-        // Remove parenthetical content like "(optional)" or "(alternatively use lard)"
-        while let open = text.firstIndex(of: "(") {
-            if let close = text[open...].firstIndex(of: ")") {
-                text.removeSubrange(open...close)
-            } else {
-                break
-            }
-        }
-        
-        // Split on comma - prep instructions often come after comma
-        // e.g., "1 egg, beaten, for glazing" → take "1 egg"
-        let commaParts = text.components(separatedBy: ",")
-        if commaParts.count > 1 {
-            // Check if first part has the core ingredient
-            let firstPart = commaParts[0].trimmingCharacters(in: .whitespaces)
-            if containsIngredientNoun(firstPart) {
-                text = firstPart
-            }
-        }
-        
-        // Remove trailing prep phrases that start with "for"
-        // e.g., "egg for glazing" → "egg"
-        if let forRange = text.range(of: " for ", options: .caseInsensitive) {
-            text = String(text[..<forRange.lowerBound])
-        }
-        
-        // Remove standalone prep words at the end
-        let prepWords = [
-            "beaten", "whisked", "chopped", "diced", "minced", "sliced", "crushed",
-            "peeled", "grated", "shredded", "melted", "softened", "sifted",
-            "halved", "quartered", "cubed", "mashed", "mixed"
-        ]
-        
-        var words = text.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
-        
-        // Remove prep words from the end
-        while let lastWord = words.last?.lowercased().trimmingCharacters(in: .punctuationCharacters),
-              prepWords.contains(lastWord) {
-            words.removeLast()
-        }
-        
-        text = words.joined(separator: " ")
-        
-        // Clean up any trailing commas or punctuation
-        text = text.trimmingCharacters(in: .whitespaces)
-        while text.hasSuffix(",") || text.hasSuffix(";") {
-            text = String(text.dropLast()).trimmingCharacters(in: .whitespaces)
-        }
-        
-        return text.isEmpty ? ingredient : text
-    }
-    
-    /// Check if a string contains an actual ingredient noun (not just numbers/units)
-    private func containsIngredientNoun(_ text: String) -> Bool {
-        let units: Set<String> = [
-            "g", "kg", "ml", "l", "tbsp", "tsp", "cup", "cups", "oz", "lb", "fl"
-        ]
-        let fractionChars = CharacterSet(charactersIn: "½⅓⅔¼¾/0123456789.-")
-        
-        let words = text.lowercased().components(separatedBy: .whitespaces)
-        for word in words {
-            let cleaned = word.trimmingCharacters(in: .punctuationCharacters)
-            if cleaned.isEmpty { continue }
-            if units.contains(cleaned) { continue }
-            if cleaned.unicodeScalars.allSatisfy({ fractionChars.contains($0) }) { continue }
-            // Found a real word
-            return true
-        }
-        return false
-    }
-    
-    /// Extract just the ingredient name without quantity/unit (for combining)
-    private func extractIngredientName(from ingredient: String) -> String {
-        // First clean it
-        let cleaned = cleanForShoppingList(ingredient).lowercased()
-        
-        let tokens = cleaned.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
-        
-        // Skip leading numbers, fractions, units
-        let units: Set<String> = [
-            "g", "kg", "gram", "grams", "ml", "l", "litre", "litres",
-            "tbsp", "tablespoon", "tablespoons", "tsp", "teaspoon", "teaspoons",
-            "cup", "cups", "oz", "ounce", "ounces", "lb", "lbs", "fl"
-        ]
-        let fractionChars = CharacterSet(charactersIn: "½⅓⅔¼¾/0123456789.-")
-        
-        var nameTokens: [String] = []
-        var foundName = false
-        
-        for token in tokens {
-            // Skip if it looks like a number or fraction
-            if !foundName && token.unicodeScalars.allSatisfy({ fractionChars.contains($0) }) {
-                continue
-            }
-            // Skip units
-            if !foundName && units.contains(token) {
-                continue
-            }
-            foundName = true
-            nameTokens.append(token)
-        }
-        
-        return nameTokens.joined(separator: " ")
-    }
-    
-    /// Simple pluralization
-    private func pluralize(_ word: String) -> String {
-        let lower = word.lowercased()
-        
-        // Already plural?
-        if lower.hasSuffix("s") && !lower.hasSuffix("ss") {
-            return word
-        }
-        
-        // Common irregular plurals
-        let irregulars: [String: String] = [
-            "leaf": "leaves", "loaf": "loaves", "half": "halves",
-            "potato": "potatoes", "tomato": "tomatoes",
-            "berry": "berries", "cherry": "cherries"
-        ]
-        if let plural = irregulars[lower] {
-            return plural
-        }
-        
-        // Words ending in y → ies (but not if vowel before y)
-        if lower.hasSuffix("y") && lower.count > 2 {
-            let beforeY = lower[lower.index(lower.endIndex, offsetBy: -2)]
-            if !"aeiou".contains(beforeY) {
-                return String(word.dropLast()) + "ies"
-            }
-        }
-        
-        // Default: add s
-        return word + "s"
     }
 }
 
