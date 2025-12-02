@@ -41,11 +41,14 @@ class AllergenManager: ObservableObject {
     • Cannot detect cross-contamination risks
     • Cannot detect "may contain traces of" warnings
     • Cannot guarantee detection of all allergen forms or derivatives
+    • Allergens not listed separately in recipe ingredients are not identified (e.g., peanuts in "curry paste")
+    • Allergen warnings on actual product packaging cannot be checked
     • Recipe extraction may miss or misinterpret ingredients
     • Substitution suggestions may not be safe for all individuals
     
     YOUR RESPONSIBILITY:
-    • ALWAYS read actual food labels before consuming
+    • ALWAYS read actual food labels and packaging before consuming
+    • Check ingredient packaging for allergen warnings when shopping
     • Verify all ingredients with original recipe sources
     • Consult your allergist or doctor about safe substitutions
     • When in doubt, do not consume
