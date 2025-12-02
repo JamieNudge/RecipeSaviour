@@ -9,82 +9,18 @@ import SwiftUI
 import WebKit
 import Combine
 
-// MARK: - WebView (UIViewRepresentable wrapper for WKWebView)
+// MARK: - Simple WebView wrapper
 
-struct WebView: UIViewRepresentable {
-    let url: URL?
-    @Binding var currentURL: URL?
-    @Binding var isLoading: Bool
-    @Binding var canGoBack: Bool
-    @Binding var canGoForward: Bool
-    @Binding var pageTitle: String
-    
+struct SimpleWebView: UIViewRepresentable {
     let webView: WKWebView
     
-    init(url: URL?, 
-         currentURL: Binding<URL?>,
-         isLoading: Binding<Bool>,
-         canGoBack: Binding<Bool>,
-         canGoForward: Binding<Bool>,
-         pageTitle: Binding<String>,
-         webView: WKWebView) {
-        self.url = url
-        self._currentURL = currentURL
-        self._isLoading = isLoading
-        self._canGoBack = canGoBack
-        self._canGoForward = canGoForward
-        self._pageTitle = pageTitle
-        self.webView = webView
-    }
-    
     func makeUIView(context: Context) -> WKWebView {
-        webView.navigationDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = true
-        
-        if let url = url {
-            webView.load(URLRequest(url: url))
-        }
-        
         return webView
     }
     
     func updateUIView(_ uiView: WKWebView, context: Context) {
-        // Only load if URL changed and is different from current
-        if let url = url, url != currentURL {
-            uiView.load(URLRequest(url: url))
-        }
-    }
-    
-    func makeCoordinator() -> Coordinator {
-        Coordinator(self)
-    }
-    
-    class Coordinator: NSObject, WKNavigationDelegate {
-        var parent: WebView
-        
-        init(_ parent: WebView) {
-            self.parent = parent
-        }
-        
-        func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-            parent.isLoading = true
-        }
-        
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            parent.isLoading = false
-            parent.currentURL = webView.url
-            parent.canGoBack = webView.canGoBack
-            parent.canGoForward = webView.canGoForward
-            parent.pageTitle = webView.title ?? ""
-        }
-        
-        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-            parent.isLoading = false
-        }
-        
-        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-            parent.isLoading = false
-        }
+        // No-op - we control loading imperatively via webViewStore
     }
 }
 
@@ -94,26 +30,21 @@ struct BrowserView: View {
     @Binding var isPresented: Bool
     let onExtractRecipe: (URL) -> Void
     
-    @State private var urlText: String = "https://www.google.com/search?q=recipes"
-    @State private var currentURL: URL? = nil
-    @State private var isLoading: Bool = false
-    @State private var canGoBack: Bool = false
-    @State private var canGoForward: Bool = false
-    @State private var pageTitle: String = ""
-    @State private var navigateToURL: URL? = URL(string: "https://www.google.com/search?q=recipes")
-    
     @StateObject private var webViewStore = WebViewStore()
+    @State private var urlText: String = ""
+    @State private var hasLoadedInitial: Bool = false
     
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
                 // URL Bar
                 HStack(spacing: 8) {
-                    // URL input
                     HStack {
-                        Image(systemName: isLoading ? "arrow.triangle.2.circlepath" : "globe")
+                        Image(systemName: webViewStore.isLoading ? "arrow.triangle.2.circlepath" : "globe")
                             .foregroundColor(.secondary)
                             .font(.subheadline)
+                            .rotationEffect(.degrees(webViewStore.isLoading ? 360 : 0))
+                            .animation(webViewStore.isLoading ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: webViewStore.isLoading)
                         
                         TextField("Enter URL or search", text: $urlText)
                             .textInputAutocapitalization(.never)
@@ -136,7 +67,6 @@ struct BrowserView: View {
                     .background(Color(.systemGray6))
                     .cornerRadius(10)
                     
-                    // Go button
                     Button(action: navigateToEnteredURL) {
                         Text("Go")
                             .fontWeight(.medium)
@@ -146,64 +76,67 @@ struct BrowserView: View {
                 .padding(.vertical, 8)
                 .background(Color(.systemBackground))
                 
-                Divider()
-                
-                // Web View
-                ZStack {
-                    WebView(
-                        url: navigateToURL,
-                        currentURL: $currentURL,
-                        isLoading: $isLoading,
-                        canGoBack: $canGoBack,
-                        canGoForward: $canGoForward,
-                        pageTitle: $pageTitle,
-                        webView: webViewStore.webView
-                    )
-                    
-                    if isLoading {
-                        VStack {
-                            ProgressView()
-                                .scaleEffect(1.2)
-                            Text("Loading...")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .padding(.top, 8)
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(Color(.systemBackground).opacity(0.8))
+                // Progress bar
+                GeometryReader { geometry in
+                    ZStack(alignment: .leading) {
+                        Rectangle()
+                            .fill(Color(.systemGray5))
+                            .frame(height: 2)
+                        
+                        Rectangle()
+                            .fill(RSTheme.Colors.primary)
+                            .frame(width: geometry.size.width * webViewStore.progress, height: 2)
+                            .animation(.easeInOut(duration: 0.2), value: webViewStore.progress)
                     }
                 }
+                .frame(height: 2)
+                .opacity(webViewStore.isLoading ? 1 : 0)
+                .animation(.easeInOut(duration: 0.15), value: webViewStore.isLoading)
+                
+                // Web View
+                SimpleWebView(webView: webViewStore.webView)
+                    .onAppear {
+                        if !hasLoadedInitial {
+                            hasLoadedInitial = true
+                            urlText = "https://duckduckgo.com"
+                            webViewStore.load(urlString: "https://duckduckgo.com")
+                        }
+                    }
                 
                 Divider()
                 
                 // Bottom toolbar
                 HStack(spacing: 0) {
-                    // Back
                     Button(action: { webViewStore.webView.goBack() }) {
                         Image(systemName: "chevron.left")
                             .font(.title3)
                             .frame(maxWidth: .infinity)
                     }
-                    .disabled(!canGoBack)
+                    .disabled(!webViewStore.canGoBack)
+                    .opacity(webViewStore.canGoBack ? 1 : 0.4)
                     
-                    // Forward
                     Button(action: { webViewStore.webView.goForward() }) {
                         Image(systemName: "chevron.right")
                             .font(.title3)
                             .frame(maxWidth: .infinity)
                     }
-                    .disabled(!canGoForward)
+                    .disabled(!webViewStore.canGoForward)
+                    .opacity(webViewStore.canGoForward ? 1 : 0.4)
                     
-                    // Refresh
-                    Button(action: { webViewStore.webView.reload() }) {
-                        Image(systemName: "arrow.clockwise")
+                    Button(action: {
+                        if webViewStore.isLoading {
+                            webViewStore.webView.stopLoading()
+                        } else {
+                            webViewStore.webView.reload()
+                        }
+                    }) {
+                        Image(systemName: webViewStore.isLoading ? "xmark" : "arrow.clockwise")
                             .font(.title3)
                             .frame(maxWidth: .infinity)
                     }
                     
-                    // Extract Recipe Button
                     Button(action: {
-                        if let url = currentURL {
+                        if let url = webViewStore.currentURL {
                             onExtractRecipe(url)
                             isPresented = false
                         }
@@ -216,16 +149,16 @@ struct BrowserView: View {
                         .foregroundColor(.white)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 8)
-                        .background(currentURL != nil ? RSTheme.Colors.primary : Color.gray)
+                        .background(webViewStore.currentURL != nil ? RSTheme.Colors.primary : Color.gray)
                         .cornerRadius(20)
                     }
-                    .disabled(currentURL == nil)
+                    .disabled(webViewStore.currentURL == nil)
                     .frame(maxWidth: .infinity)
                 }
                 .padding(.vertical, 10)
                 .background(Color(.systemBackground))
             }
-            .navigationTitle(pageTitle.isEmpty ? "Browse Recipes" : pageTitle)
+            .navigationTitle(webViewStore.pageTitle.isEmpty ? "Browse Recipes" : webViewStore.pageTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -234,7 +167,7 @@ struct BrowserView: View {
                     }
                 }
             }
-            .onChange(of: currentURL) { _, newURL in
+            .onChange(of: webViewStore.currentURL) { _, newURL in
                 if let url = newURL {
                     urlText = url.absoluteString
                 }
@@ -244,38 +177,124 @@ struct BrowserView: View {
     
     private func navigateToEnteredURL() {
         var urlString = urlText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !urlString.isEmpty else { return }
         
-        // If no scheme, add https://
         if !urlString.lowercased().hasPrefix("http://") && !urlString.lowercased().hasPrefix("https://") {
-            // Check if it looks like a URL or a search query
             if urlString.contains(".") && !urlString.contains(" ") {
                 urlString = "https://" + urlString
             } else {
-                // Treat as search query
                 let encoded = urlString.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? urlString
-                urlString = "https://www.google.com/search?q=\(encoded)"
+                urlString = "https://duckduckgo.com/?q=\(encoded)"
             }
         }
         
-        if let url = URL(string: urlString) {
-            navigateToURL = url
-        }
+        webViewStore.load(urlString: urlString)
     }
 }
 
-// MARK: - WebView Store (to maintain WKWebView instance)
+// MARK: - WebView Store (manages WKWebView and state)
 
-class WebViewStore: ObservableObject {
+class WebViewStore: NSObject, ObservableObject, WKNavigationDelegate {
     let webView: WKWebView
     
-    init() {
+    @Published var currentURL: URL?
+    @Published var pageTitle: String = ""
+    @Published var canGoBack: Bool = false
+    @Published var canGoForward: Bool = false
+    @Published var progress: Double = 0.0
+    @Published var isLoading: Bool = false
+    
+    private var progressObservation: NSKeyValueObservation?
+    private var urlObservation: NSKeyValueObservation?
+    private var titleObservation: NSKeyValueObservation?
+    private var loadingObservation: NSKeyValueObservation?
+    private var backObservation: NSKeyValueObservation?
+    private var forwardObservation: NSKeyValueObservation?
+    
+    override init() {
         let configuration = WKWebViewConfiguration()
         configuration.allowsInlineMediaPlayback = true
+        configuration.suppressesIncrementalRendering = false
+        configuration.mediaTypesRequiringUserActionForPlayback = []
+        
         self.webView = WKWebView(frame: .zero, configuration: configuration)
+        
+        super.init()
+        
+        webView.navigationDelegate = self
+        webView.allowsLinkPreview = true
+        
+        setupObservers()
+    }
+    
+    private func setupObservers() {
+        progressObservation = webView.observe(\.estimatedProgress, options: [.new]) { [weak self] webView, _ in
+            DispatchQueue.main.async {
+                self?.progress = webView.estimatedProgress
+            }
+        }
+        
+        urlObservation = webView.observe(\.url, options: [.new]) { [weak self] webView, _ in
+            DispatchQueue.main.async {
+                self?.currentURL = webView.url
+            }
+        }
+        
+        titleObservation = webView.observe(\.title, options: [.new]) { [weak self] webView, _ in
+            DispatchQueue.main.async {
+                self?.pageTitle = webView.title ?? ""
+            }
+        }
+        
+        loadingObservation = webView.observe(\.isLoading, options: [.new]) { [weak self] webView, _ in
+            DispatchQueue.main.async {
+                self?.isLoading = webView.isLoading
+            }
+        }
+        
+        backObservation = webView.observe(\.canGoBack, options: [.new]) { [weak self] webView, _ in
+            DispatchQueue.main.async {
+                self?.canGoBack = webView.canGoBack
+            }
+        }
+        
+        forwardObservation = webView.observe(\.canGoForward, options: [.new]) { [weak self] webView, _ in
+            DispatchQueue.main.async {
+                self?.canGoForward = webView.canGoForward
+            }
+        }
+    }
+    
+    func load(urlString: String) {
+        guard let url = URL(string: urlString) else { return }
+        webView.load(URLRequest(url: url))
+    }
+    
+    // MARK: - WKNavigationDelegate
+    
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        // State is updated via KVO observers
+    }
+    
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        // Errors are handled gracefully - page just won't load
+    }
+    
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        // Provisional navigation failures (DNS, etc.) are handled gracefully
+    }
+    
+    deinit {
+        progressObservation?.invalidate()
+        urlObservation?.invalidate()
+        titleObservation?.invalidate()
+        loadingObservation?.invalidate()
+        backObservation?.invalidate()
+        forwardObservation?.invalidate()
     }
 }
 
-// MARK: - Quick Recipe Sites
+// MARK: - Quick Recipe Sites (kept for potential future use)
 
 struct QuickSiteButton: View {
     let name: String
@@ -299,4 +318,3 @@ struct QuickSiteButton: View {
         .buttonStyle(.plain)
     }
 }
-

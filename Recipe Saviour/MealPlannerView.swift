@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MealPlannerView: View {
     @EnvironmentObject var recipeManager: RecipeManager
+    @EnvironmentObject var allergenManager: AllergenManager
     @State private var selectedRecipes: Set<UUID> = []
     @State private var showingShoppingList = false
     @State private var autoMealCount: Int = 3
@@ -34,6 +35,7 @@ struct MealPlannerView: View {
             .sheet(isPresented: $showingShoppingList) {
                 ShoppingListView(recipes: selectedRecipesArray, allowSaving: true)
                     .environmentObject(recipeManager)
+                    .environmentObject(allergenManager)
             }
         }
     }
@@ -294,6 +296,7 @@ struct MealPlannerView: View {
 struct ShoppingListView: View {
     @Environment(\.dismiss) var dismiss
     @EnvironmentObject var recipeManager: RecipeManager
+    @EnvironmentObject var allergenManager: AllergenManager
     let recipes: [Recipe]
     let allowSaving: Bool
     
@@ -301,6 +304,7 @@ struct ShoppingListView: View {
     @State private var showingShareSheet = false
     @State private var showingCopiedToast = false
     @State private var shareMode: ShareMode = .shoppingList
+    @State private var showingAllergenSummary = false
     
     enum ShareMode {
         case shoppingList
@@ -310,6 +314,21 @@ struct ShoppingListView: View {
     /// Compute shopping items for sharing (same logic as ShoppingListContentView)
     private var shoppingItems: [ShoppingListItem] {
         ShoppingListItemBuilder.buildItems(from: recipes)
+    }
+    
+    /// All allergen matches across all shopping items
+    private var allergenMatches: [AllergenMatch] {
+        let allIngredients = shoppingItems.flatMap { $0.originalTexts }
+        return allergenManager.scanIngredients(allIngredients)
+    }
+    
+    private var uniqueAllergenNames: [String] {
+        Array(Set(allergenMatches.map { $0.allergen.name })).sorted()
+    }
+    
+    /// Check if a specific shopping item has allergen matches
+    private func allergenMatchesForItem(_ item: ShoppingListItem) -> [AllergenMatch] {
+        allergenManager.scanIngredients(item.originalTexts)
     }
     
     /// Get formatted text for current share mode
@@ -326,6 +345,17 @@ struct ShoppingListView: View {
         NavigationView {
             ZStack {
                 VStack(spacing: 0) {
+                    // Allergen warning banner (if any matches found)
+                    if !allergenMatches.isEmpty {
+                        AllergenWarningBanner(
+                            matchCount: allergenMatches.count,
+                            allergenNames: uniqueAllergenNames,
+                            onTap: { showingAllergenSummary = true }
+                        )
+                        .padding(.horizontal)
+                        .padding(.top, 8)
+                    }
+                    
                     // Planned meals summary
                     if !recipes.isEmpty {
                         ScrollView(.horizontal, showsIndicators: false) {
@@ -353,6 +383,7 @@ struct ShoppingListView: View {
                     
                     // Full shopping list with common-ingredient analysis
                     ShoppingListContentView(recipes: recipes, isPreview: false)
+                        .environmentObject(allergenManager)
                 }
                 
                 // Toast overlay
@@ -444,6 +475,10 @@ struct ShoppingListView: View {
             }
             .sheet(isPresented: $showingShareSheet) {
                 ShareSheet(items: [getShareText(mode: shareMode)])
+            }
+            .sheet(isPresented: $showingAllergenSummary) {
+                AllergenMatchesSummarySheet(matches: allergenMatches, recipeId: nil)
+                    .environmentObject(allergenManager)
             }
         }
     }
@@ -703,12 +738,18 @@ enum ShoppingListItemBuilder {
 }
 
 struct ShoppingListContentView: View {
+    @EnvironmentObject var allergenManager: AllergenManager
     let recipes: [Recipe]
     let isPreview: Bool
     
     /// Build a proper shopping list with combined quantities
     var shoppingItems: [ShoppingListItem] {
         ShoppingListItemBuilder.buildItems(from: recipes)
+    }
+    
+    /// Get allergen matches for a specific item
+    func allergenMatchesForItem(_ item: ShoppingListItem) -> [AllergenMatch] {
+        allergenManager.scanIngredients(item.originalTexts)
     }
     
     var body: some View {
@@ -719,24 +760,7 @@ struct ShoppingListContentView: View {
             if !commonItems.isEmpty {
                 Section {
                     ForEach(commonItems) { item in
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text(item.displayText)
-                                    .rsBody()
-                                Spacer()
-                                Text("\(item.recipeCount) recipes")
-                                    .font(.caption)
-                                    .foregroundColor(.white)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                                    .background(RSTheme.Colors.accent)
-                                    .cornerRadius(8)
-                            }
-                            if !isPreview {
-                                Text("For: \(item.recipeNames.joined(separator: ", "))")
-                                    .rsCaption()
-                            }
-                        }
+                        ShoppingListItemRow(item: item, isPreview: isPreview, allergenMatches: allergenMatchesForItem(item))
                     }
                 } header: {
                     Text("Common Ingredients (\(commonItems.count))")
@@ -756,12 +780,7 @@ struct ShoppingListContentView: View {
             if !uniqueItems.isEmpty && !isPreview {
                 Section {
                     ForEach(uniqueItems) { item in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(item.displayText)
-                                .rsBody()
-                            Text("For: \(item.recipeNames.first ?? "")")
-                                .rsCaption()
-                        }
+                        ShoppingListItemRow(item: item, isPreview: isPreview, allergenMatches: allergenMatchesForItem(item))
                     }
                 } header: {
                     Text(recipes.count == 1 ? "Ingredients (\(uniqueItems.count))" : "Unique Ingredients (\(uniqueItems.count))")
@@ -788,6 +807,68 @@ struct ShoppingListContentView: View {
                             .fontWeight(.bold)
                     }
                 }
+            }
+        }
+    }
+}
+
+// MARK: - Shopping List Item Row (with allergen support)
+
+struct ShoppingListItemRow: View {
+    @EnvironmentObject var allergenManager: AllergenManager
+    let item: ShoppingListItem
+    let isPreview: Bool
+    let allergenMatches: [AllergenMatch]
+    
+    @State private var showingAllergenDetail = false
+    
+    private var uniqueAllergenNames: [String] {
+        Array(Set(allergenMatches.map { $0.allergen.name })).sorted()
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                // Allergen warning icon if matches found
+                if !allergenMatches.isEmpty {
+                    Button(action: { showingAllergenDetail = true }) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                            .font(.subheadline)
+                    }
+                    .buttonStyle(.plain)
+                }
+                
+                Text(item.displayText)
+                    .rsBody()
+                
+                Spacer()
+                
+                if item.isCommon {
+                    Text("\(item.recipeCount) recipes")
+                        .font(.caption)
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(RSTheme.Colors.accent)
+                        .cornerRadius(8)
+                }
+            }
+            
+            // Allergen badge
+            if !allergenMatches.isEmpty {
+                AllergenBadge(allergenNames: uniqueAllergenNames)
+            }
+            
+            if !isPreview {
+                Text("For: \(item.recipeNames.joined(separator: ", "))")
+                    .rsCaption()
+            }
+        }
+        .sheet(isPresented: $showingAllergenDetail) {
+            if let firstMatch = allergenMatches.first {
+                AllergenMatchDetailView(match: firstMatch, recipeId: nil)
+                    .environmentObject(allergenManager)
             }
         }
     }

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var recipeManager = RecipeManager.shared
+    @StateObject private var allergenManager = AllergenManager.shared
     @State private var showingDisclaimer = false
     
     var body: some View {
@@ -11,6 +12,7 @@ struct ContentView: View {
                     Label("Extract", systemImage: "link")
                 }
                 .environmentObject(recipeManager)
+                .environmentObject(allergenManager)
             
             SavedRecipesView()
                 .tabItem {
@@ -18,6 +20,7 @@ struct ContentView: View {
                 }
                 .badge(recipeManager.savedRecipes.count)
                 .environmentObject(recipeManager)
+                .environmentObject(allergenManager)
             
             FavouritePlansView()
                 .tabItem {
@@ -25,6 +28,7 @@ struct ContentView: View {
                 }
                 .badge(recipeManager.favouritePlans.count)
                 .environmentObject(recipeManager)
+                .environmentObject(allergenManager)
             
             MealPlannerView()
                 .tabItem {
@@ -32,11 +36,13 @@ struct ContentView: View {
                 }
                 .badge("Plan my week")
                 .environmentObject(recipeManager)
+                .environmentObject(allergenManager)
             
             SettingsView()
                 .tabItem {
                     Label("Settings", systemImage: "gear")
                 }
+                .environmentObject(allergenManager)
         }
         .background(RSTheme.Colors.background.ignoresSafeArea())
     }
@@ -44,6 +50,7 @@ struct ContentView: View {
 
 struct ExtractRecipeView: View {
     @EnvironmentObject var recipeManager: RecipeManager
+    @EnvironmentObject var allergenManager: AllergenManager
     @State private var urlString: String = ""
     @State private var isLoading = false
     @State private var recipe: Recipe?
@@ -267,12 +274,23 @@ struct ExtractRecipeView: View {
 
 struct RecipeView: View {
     @EnvironmentObject var recipeManager: RecipeManager
+    @EnvironmentObject var allergenManager: AllergenManager
     let recipe: Recipe
     let showSaveButton: Bool
     
     @State private var showingSavedAlert = false
     @State private var showingShareSheet = false
     @State private var showingCopiedToast = false
+    @State private var showingAllergenSummary = false
+    
+    // Compute allergen matches
+    private var allergenMatches: [AllergenMatch] {
+        allergenManager.scanIngredients(recipe.ingredients, forRecipe: recipe.id)
+    }
+    
+    private var uniqueAllergenNames: [String] {
+        Array(Set(allergenMatches.map { $0.allergen.name })).sorted()
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: RSTheme.Spacing.lg) {
@@ -319,20 +337,28 @@ struct RecipeView: View {
                     .help(recipeManager.isRecipeSaved(recipe) ? "Already saved" : "Save recipe")
                 }
             }
+            
+            // Allergen warning banner (if any matches found)
+            if !allergenMatches.isEmpty {
+                AllergenWarningBanner(
+                    matchCount: allergenMatches.count,
+                    allergenNames: uniqueAllergenNames,
+                    onTap: { showingAllergenSummary = true }
+                )
+            }
 
             if !recipe.ingredients.isEmpty {
                 VStack(alignment: .leading, spacing: RSTheme.Spacing.sm) {
                     Text("Ingredients")
                         .rsSectionTitle()
                     VStack(alignment: .leading, spacing: 6) {
-                        ForEach(recipe.ingredients, id: \.self) { line in
-                            HStack(alignment: .top, spacing: 8) {
-                                Text("•")
-                                    .font(.body.bold())
-                                Text(line)
-                                    .rsBody()
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
+                        ForEach(Array(recipe.ingredients.enumerated()), id: \.offset) { index, ingredient in
+                            HighlightedIngredientRow(
+                                ingredient: ingredient,
+                                index: index,
+                                matches: allergenMatches,
+                                recipeId: recipe.id
+                            )
                         }
                     }
                 }
@@ -375,6 +401,10 @@ struct RecipeView: View {
         .sheet(isPresented: $showingShareSheet) {
             ShareSheet(items: [ShareHelper.formatRecipe(recipe)])
         }
+        .sheet(isPresented: $showingAllergenSummary) {
+            AllergenMatchesSummarySheet(matches: allergenMatches, recipeId: recipe.id)
+                .environmentObject(allergenManager)
+        }
         .overlay(alignment: .bottom) {
             if showingCopiedToast {
                 CopiedToastView()
@@ -387,6 +417,7 @@ struct RecipeView: View {
 
 struct SavedRecipesView: View {
     @EnvironmentObject var recipeManager: RecipeManager
+    @EnvironmentObject var allergenManager: AllergenManager
     @State private var selectedRecipe: Recipe?
     
     var body: some View {
@@ -412,33 +443,14 @@ struct SavedRecipesView: View {
                     } else {
                         List {
                             ForEach(recipeManager.savedRecipes.sorted(by: { $0.dateSaved > $1.dateSaved })) { recipe in
-                                Button(action: {
-                                    selectedRecipe = recipe
-                                }) {
-                                    HStack(alignment: .top, spacing: RSTheme.Spacing.md) {
-                                        Image(systemName: "fork.knife.circle.fill")
-                                            .foregroundColor(RSTheme.Colors.accent)
-                                            .font(.title2)
-                                        
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(recipe.title)
-                                                .font(.headline)
-                                            Text("\(recipe.ingredients.count) ingredients • \(recipe.steps.count) steps")
-                                                .rsCaption()
-                                            Text("Saved \(recipe.dateSaved.formatted(date: .abbreviated, time: .omitted))")
-                                                .rsCaption()
+                                RecipeListRow(recipe: recipe, onTap: { selectedRecipe = recipe })
+                                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                        Button(role: .destructive) {
+                                            recipeManager.deleteRecipe(recipe)
+                                        } label: {
+                                            Label("Delete", systemImage: "trash")
                                         }
                                     }
-                                    .padding(.vertical, RSTheme.Spacing.sm)
-                                }
-                                .buttonStyle(.plain)
-                                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                    Button(role: .destructive) {
-                                        recipeManager.deleteRecipe(recipe)
-                                    } label: {
-                                        Label("Delete", systemImage: "trash")
-                                    }
-                                }
                             }
                         }
                         .scrollContentBackground(.hidden)
@@ -451,8 +463,52 @@ struct SavedRecipesView: View {
             .sheet(item: $selectedRecipe) { recipe in
                 RecipeDetailSheet(recipe: recipe, onDismiss: { selectedRecipe = nil })
                     .environmentObject(recipeManager)
+                    .environmentObject(allergenManager)
             }
         }
+    }
+}
+
+// MARK: - Recipe List Row (shows allergen badge if applicable)
+
+struct RecipeListRow: View {
+    @EnvironmentObject var allergenManager: AllergenManager
+    let recipe: Recipe
+    let onTap: () -> Void
+    
+    private var allergenMatches: [AllergenMatch] {
+        allergenManager.scanIngredients(recipe.ingredients, forRecipe: recipe.id)
+    }
+    
+    private var uniqueAllergenNames: [String] {
+        Array(Set(allergenMatches.map { $0.allergen.name })).sorted()
+    }
+    
+    var body: some View {
+        Button(action: onTap) {
+            HStack(alignment: .top, spacing: RSTheme.Spacing.md) {
+                Image(systemName: "fork.knife.circle.fill")
+                    .foregroundColor(RSTheme.Colors.accent)
+                    .font(.title2)
+                
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(recipe.title)
+                        .font(.headline)
+                    
+                    // Allergen badge if matches found
+                    if !allergenMatches.isEmpty {
+                        AllergenBadge(allergenNames: uniqueAllergenNames)
+                    }
+                    
+                    Text("\(recipe.ingredients.count) ingredients • \(recipe.steps.count) steps")
+                        .rsCaption()
+                    Text("Saved \(recipe.dateSaved.formatted(date: .abbreviated, time: .omitted))")
+                        .rsCaption()
+                }
+            }
+            .padding(.vertical, RSTheme.Spacing.sm)
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -460,6 +516,7 @@ struct SavedRecipesView: View {
 
 struct RecipeDetailSheet: View {
     @EnvironmentObject var recipeManager: RecipeManager
+    @EnvironmentObject var allergenManager: AllergenManager
     let recipe: Recipe
     let onDismiss: () -> Void
     

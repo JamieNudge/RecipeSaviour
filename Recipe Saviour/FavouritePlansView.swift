@@ -2,6 +2,7 @@ import SwiftUI
 
 struct FavouritePlansView: View {
     @EnvironmentObject var recipeManager: RecipeManager
+    @EnvironmentObject var allergenManager: AllergenManager
     @State private var selectedPlan: MealPlan?
     
     var body: some View {
@@ -64,6 +65,7 @@ struct FavouritePlansView: View {
                 NavigationView {
                     ShoppingListView(recipes: plan.recipes, allowSaving: false)
                         .environmentObject(recipeManager)
+                        .environmentObject(allergenManager)
                 }
             }
         }

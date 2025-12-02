@@ -1,11 +1,47 @@
 import SwiftUI
 
 struct SettingsView: View {
+    @EnvironmentObject var allergenManager: AllergenManager
+    
     @State private var showingDisclaimer = false
+    @State private var showingAllergenProfile = false
     
     var body: some View {
         NavigationView {
             Form {
+                // Allergen Profile Section
+                Section {
+                    Button(action: {
+                        showingAllergenProfile = true
+                    }) {
+                        HStack {
+                            Image(systemName: "allergens")
+                                .foregroundColor(.orange)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Allergen Profile")
+                                    .foregroundColor(.primary)
+                                if allergenManager.profile.hasActiveAllergens {
+                                    Text("Tracking \(allergenManager.profile.activeAllergens.count) allergen(s)")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                } else {
+                                    Text("Not configured")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                } header: {
+                    Text("Safety")
+                } footer: {
+                    Text("Set up allergen detection to highlight potentially unsafe ingredients in recipes")
+                }
+                
                 Section {
                     Button(action: {
                         showingDisclaimer = true
@@ -55,6 +91,10 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
+            .sheet(isPresented: $showingAllergenProfile) {
+                AllergenProfileView()
+                    .environmentObject(allergenManager)
+            }
             .alert("Disclaimer", isPresented: $showingDisclaimer) {
                 Button("OK", role: .cancel) { }
             } message: {
@@ -76,5 +116,5 @@ struct SettingsView: View {
 
 #Preview {
     SettingsView()
+        .environmentObject(AllergenManager.shared)
 }
-
