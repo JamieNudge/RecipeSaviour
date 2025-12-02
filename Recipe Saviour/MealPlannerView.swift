@@ -299,6 +299,7 @@ struct ShoppingListView: View {
     
     @State private var showingSavedAlert = false
     @State private var showingShareSheet = false
+    @State private var showingCopiedToast = false
     @State private var shareMode: ShareMode = .shoppingList
     
     enum ShareMode {
@@ -311,36 +312,58 @@ struct ShoppingListView: View {
         ShoppingListItemBuilder.buildItems(from: recipes)
     }
     
+    /// Get formatted text for current share mode
+    private func getShareText(mode: ShareMode) -> String {
+        switch mode {
+        case .shoppingList:
+            return ShareHelper.formatShoppingList(items: shoppingItems, recipes: recipes)
+        case .mealPlan:
+            return ShareHelper.formatMealPlan(recipes: recipes, shoppingItems: shoppingItems)
+        }
+    }
+    
     var body: some View {
         NavigationView {
-            VStack(spacing: 0) {
-                // Planned meals summary
-                if !recipes.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 12) {
-                            ForEach(recipes) { recipe in
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(recipe.title)
-                                        .rsCaption()
-                                        .lineLimit(2)
-                                    Text("\(recipe.ingredients.count) ingredients")
-                                        .rsCaption()
+            ZStack {
+                VStack(spacing: 0) {
+                    // Planned meals summary
+                    if !recipes.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 12) {
+                                ForEach(recipes) { recipe in
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(recipe.title)
+                                            .rsCaption()
+                                            .lineLimit(2)
+                                        Text("\(recipe.ingredients.count) ingredients")
+                                            .rsCaption()
+                                    }
+                                    .padding(8)
+                                    .background(RSTheme.Colors.card)
+                                    .cornerRadius(8)
+                                    .frame(width: 140)
                                 }
-                                .padding(8)
-                                .background(RSTheme.Colors.card)
-                                .cornerRadius(8)
-                                .frame(width: 140)
                             }
+                            .padding()
                         }
-                        .padding()
+                        .background(RSTheme.Colors.background)
+                        
+                        Divider()
                     }
-                    .background(RSTheme.Colors.background)
                     
-                    Divider()
+                    // Full shopping list with common-ingredient analysis
+                    ShoppingListContentView(recipes: recipes, isPreview: false)
                 }
                 
-                // Full shopping list with common-ingredient analysis
-                ShoppingListContentView(recipes: recipes, isPreview: false)
+                // Toast overlay
+                if showingCopiedToast {
+                    VStack {
+                        Spacer()
+                        CopiedToastView()
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                    .animation(.spring(response: 0.3), value: showingCopiedToast)
+                }
             }
             .navigationTitle("Meal Plan & Shopping List")
             .navigationBarTitleDisplayMode(.inline)
@@ -355,6 +378,34 @@ struct ShoppingListView: View {
                                 Image(systemName: "star.circle.fill")
                                     .foregroundColor(RSTheme.Colors.accent)
                             }
+                        }
+                        
+                        // Copy menu
+                        Menu {
+                            Button(action: {
+                                UIPasteboard.general.string = getShareText(mode: .shoppingList)
+                                showingCopiedToast = true
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                                    showingCopiedToast = false
+                                }
+                            }) {
+                                Label("Copy Shopping List", systemImage: "doc.on.doc")
+                            }
+                            
+                            if recipes.count > 1 {
+                                Button(action: {
+                                    UIPasteboard.general.string = getShareText(mode: .mealPlan)
+                                    showingCopiedToast = true
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                                        showingCopiedToast = false
+                                    }
+                                }) {
+                                    Label("Copy Meal Plan + List", systemImage: "doc.on.doc.fill")
+                                }
+                            }
+                        } label: {
+                            Image(systemName: "doc.on.doc")
+                                .foregroundColor(RSTheme.Colors.primary.opacity(0.7))
                         }
                         
                         // Share menu
@@ -392,15 +443,7 @@ struct ShoppingListView: View {
                 Text("This meal plan has been added to Favourite Plans.")
             }
             .sheet(isPresented: $showingShareSheet) {
-                let shareText: String = {
-                    switch shareMode {
-                    case .shoppingList:
-                        return ShareHelper.formatShoppingList(items: shoppingItems, recipes: recipes)
-                    case .mealPlan:
-                        return ShareHelper.formatMealPlan(recipes: recipes, shoppingItems: shoppingItems)
-                    }
-                }()
-                ShareSheet(items: [shareText])
+                ShareSheet(items: [getShareText(mode: shareMode)])
             }
         }
     }

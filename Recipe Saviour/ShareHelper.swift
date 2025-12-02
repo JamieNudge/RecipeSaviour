@@ -174,3 +174,22 @@ extension View {
     }
 }
 
+// MARK: - Copied Toast View
+
+struct CopiedToastView: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundColor(.green)
+            Text("Copied to clipboard")
+                .font(.subheadline.weight(.medium))
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(.ultraThinMaterial)
+        .cornerRadius(25)
+        .shadow(color: .black.opacity(0.1), radius: 10, y: 5)
+        .padding(.bottom, 20)
+    }
+}
+

@@ -238,6 +238,7 @@ struct RecipeView: View {
     
     @State private var showingSavedAlert = false
     @State private var showingShareSheet = false
+    @State private var showingCopiedToast = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: RSTheme.Spacing.lg) {
@@ -245,6 +246,21 @@ struct RecipeView: View {
                 Text(recipe.title)
                     .font(RSTheme.Typography.sectionTitle)
                 Spacer()
+                
+                // Copy button
+                Button(action: {
+                    UIPasteboard.general.string = ShareHelper.formatRecipe(recipe)
+                    showingCopiedToast = true
+                    // Auto-hide toast after 2 seconds
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        showingCopiedToast = false
+                    }
+                }) {
+                    Image(systemName: "doc.on.doc")
+                        .font(.title2)
+                        .foregroundColor(RSTheme.Colors.primary.opacity(0.7))
+                }
+                .buttonStyle(ShareButtonStyle())
                 
                 // Share button
                 Button(action: {
@@ -324,6 +340,13 @@ struct RecipeView: View {
         }
         .sheet(isPresented: $showingShareSheet) {
             ShareSheet(items: [ShareHelper.formatRecipe(recipe)])
+        }
+        .overlay(alignment: .bottom) {
+            if showingCopiedToast {
+                CopiedToastView()
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .animation(.spring(response: 0.3), value: showingCopiedToast)
+            }
         }
     }
 }
@@ -407,6 +430,7 @@ struct RecipeDetailSheet: View {
     let onDismiss: () -> Void
     
     @State private var showingShareSheet = false
+    @State private var showingCopiedToast = false
     
     var body: some View {
         NavigationView {
@@ -418,10 +442,24 @@ struct RecipeDetailSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button(action: {
-                        showingShareSheet = true
-                    }) {
-                        Image(systemName: "square.and.arrow.up")
+                    HStack(spacing: 16) {
+                        // Copy button
+                        Button(action: {
+                            UIPasteboard.general.string = ShareHelper.formatRecipe(recipe)
+                            showingCopiedToast = true
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                                showingCopiedToast = false
+                            }
+                        }) {
+                            Image(systemName: "doc.on.doc")
+                        }
+                        
+                        // Share button
+                        Button(action: {
+                            showingShareSheet = true
+                        }) {
+                            Image(systemName: "square.and.arrow.up")
+                        }
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -432,6 +470,13 @@ struct RecipeDetailSheet: View {
             }
             .sheet(isPresented: $showingShareSheet) {
                 ShareSheet(items: [ShareHelper.formatRecipe(recipe)])
+            }
+            .overlay(alignment: .bottom) {
+                if showingCopiedToast {
+                    CopiedToastView()
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .animation(.spring(response: 0.3), value: showingCopiedToast)
+                }
             }
         }
     }
